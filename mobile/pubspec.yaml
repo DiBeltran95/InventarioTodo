@@ -47,6 +47,12 @@ dependencies:
   printing: ^5.15.0
   share_plus: ^13.3.0
 
+  # ── Acciones del sistema ──────────────────────────────────────────────────
+  # Llamar, escribir por WhatsApp o mandar un correo al proveedor desde su
+  # ficha. Es la acción por la que uno abre esa pantalla; copiar el número al
+  # portapapeles y salir a marcarlo a mano sería un paso de más cada vez.
+  url_launcher: ^6.3.1
+
   # ── Seguridad y sistema ───────────────────────────────────────────────────
   flutter_secure_storage: ^10.3.1
   shared_preferences: ^2.5.5

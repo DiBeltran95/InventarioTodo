@@ -269,19 +269,49 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
             ],
             const SizedBox(height: 20),
 
-            if (proveedores.isNotEmpty) ...[
-              DropdownButtonFormField<String?>(
-                initialValue: _proveedorUuid,
-                decoration: const InputDecoration(labelText: 'Proveedor (opcional)'),
-                items: [
-                  const DropdownMenuItem(value: null, child: Text('Sin proveedor')),
-                  for (final p in proveedores)
-                    DropdownMenuItem(value: p.uuid, child: Text(p.nombre)),
+            // Sin proveedores, antes no se pintaba nada: el campo desaparecía y
+            // no había forma de enterarse de que se podían registrar. Ahora el
+            // hueco invita a crear el primero y vuelve aquí con él ya elegido.
+            if (proveedores.isEmpty)
+              Card(
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: context.colores.secondaryContainer,
+                    child: Icon(
+                      Icons.local_shipping_outlined,
+                      size: 20,
+                      color: context.colores.onSecondaryContainer,
+                    ),
+                  ),
+                  title: const Text('Sin proveedores registrados'),
+                  subtitle: const Text('Añade a quién le compras para asociarlo'),
+                  trailing: const Icon(Icons.add_rounded),
+                  onTap: () => context.push(Rutas.proveedores),
+                ),
+              )
+            else
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String?>(
+                      initialValue: _proveedorUuid,
+                      decoration: const InputDecoration(labelText: 'Proveedor (opcional)'),
+                      items: [
+                        const DropdownMenuItem(value: null, child: Text('Sin proveedor')),
+                        for (final p in proveedores)
+                          DropdownMenuItem(value: p.uuid, child: Text(p.nombre)),
+                      ],
+                      onChanged: (v) => setState(() => _proveedorUuid = v),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => context.push(Rutas.proveedores),
+                    icon: const Icon(Icons.tune_rounded),
+                    tooltip: 'Gestionar proveedores',
+                  ),
                 ],
-                onChanged: (v) => setState(() => _proveedorUuid = v),
               ),
-              const SizedBox(height: 14),
-            ],
+            const SizedBox(height: 14),
 
             TextFormField(
               controller: _documento,

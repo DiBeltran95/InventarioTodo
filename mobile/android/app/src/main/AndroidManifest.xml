@@ -66,5 +66,21 @@
             <action android:name="android.intent.action.GET_CONTENT"/>
             <data android:mimeType="image/*"/>
         </intent>
+
+        <!-- url_launcher: llamar, escribir por WhatsApp o mandar un correo al
+             proveedor desde su ficha. Sin declararlos aquí, Android 11+ oculta
+             esas apps y `canLaunchUrl` devuelve false aunque estén instaladas. -->
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+            <data android:scheme="tel"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO"/>
+            <data android:scheme="mailto"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
     </queries>
 </manifest>

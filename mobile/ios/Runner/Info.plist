@@ -18,6 +18,17 @@
 	<string>Se accede a tus fotos para poder elegir la imagen de un producto del catálogo.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Permite guardar en tu carrete las etiquetas QR y los tickets que generes.</string>
+
+	<!-- url_launcher: sin declarar los esquemas, `canLaunchUrl` devuelve false
+	     en iOS aunque la app esté instalada, y los botones de la ficha de
+	     proveedor aparecerían desactivados sin motivo aparente. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tel</string>
+		<string>mailto</string>
+		<string>https</string>
+		<string>whatsapp</string>
+	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

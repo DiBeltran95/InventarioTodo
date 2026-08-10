@@ -6,6 +6,7 @@ import '../database/app_database.dart';
 import '../database/daos/inventario_dao.dart';
 import '../database/daos/outbox_dao.dart';
 import '../database/daos/productos_dao.dart';
+import '../database/daos/proveedores_dao.dart';
 import '../database/daos/reportes_dao.dart';
 import '../database/daos/sync_dao.dart';
 import '../database/daos/ventas_dao.dart';
@@ -53,6 +54,10 @@ final ventasDaoProvider = Provider<VentasDao>(
     ref.watch(outboxDaoProvider),
     ref.watch(inventarioDaoProvider),
   ),
+);
+
+final proveedoresDaoProvider = Provider<ProveedoresDao>(
+  (ref) => ProveedoresDao(ref.watch(appDatabaseProvider), ref.watch(outboxDaoProvider)),
 );
 
 final syncDaoProvider = Provider<SyncDao>(

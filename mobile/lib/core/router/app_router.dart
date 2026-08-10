@@ -13,6 +13,7 @@ import '../../features/inventario/presentation/movimientos_page.dart';
 import '../../features/productos/presentation/producto_detalle_page.dart';
 import '../../features/productos/presentation/producto_form_page.dart';
 import '../../features/productos/presentation/productos_page.dart';
+import '../../features/proveedores/presentation/proveedores_page.dart';
 import '../../features/reportes/presentation/empleados_page.dart';
 import '../../features/reportes/presentation/reportes_page.dart';
 import '../../features/scanner/domain/modo_escaner.dart';
@@ -42,6 +43,7 @@ class Rutas {
   static const ajustes = '/ajustes';
   static const pendientes = '/pendientes';
   static const usuarios = '/usuarios';
+  static const proveedores = '/proveedores';
   static const empleados = '/empleados';
   static const productoNuevo = '/productos/nuevo';
 
@@ -72,6 +74,7 @@ const _prefijosSoloAdmin = [
   Rutas.movimientos, // kardex completo
   Rutas.reportes, // márgenes y costos del negocio
   Rutas.usuarios, // gestión de empleados
+  Rutas.proveedores, // a quién se le compra
   Rutas.empleados, // control de cajas
 ];
 
@@ -228,6 +231,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: Rutas.empleados,
         parentNavigatorKey: _navegadorRaiz,
         builder: (context, estado) => const EmpleadosPage(),
+      ),
+      GoRoute(
+        path: Rutas.proveedores,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const ProveedoresPage(),
       ),
       GoRoute(
         path: Rutas.usuarios,

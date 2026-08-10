@@ -196,6 +196,13 @@ class AjustesPage extends ConsumerWidget {
                   onTap: () => context.push(Rutas.usuarios),
                 ),
                 ListTile(
+                  leading: const Icon(Icons.local_shipping_outlined),
+                  title: const Text('Proveedores'),
+                  subtitle: const Text('A quién le compras'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push(Rutas.proveedores),
+                ),
+                ListTile(
                   leading: const Icon(Icons.point_of_sale_outlined),
                   title: const Text('Control de cajas'),
                   subtitle: const Text('Qué ha vendido cada empleado'),
