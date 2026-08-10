@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/app_database.dart';
+import '../database/daos/categorias_dao.dart';
 import '../database/daos/inventario_dao.dart';
 import '../database/daos/outbox_dao.dart';
 import '../database/daos/productos_dao.dart';
@@ -54,6 +55,10 @@ final ventasDaoProvider = Provider<VentasDao>(
     ref.watch(outboxDaoProvider),
     ref.watch(inventarioDaoProvider),
   ),
+);
+
+final categoriasDaoProvider = Provider<CategoriasDao>(
+  (ref) => CategoriasDao(ref.watch(appDatabaseProvider), ref.watch(outboxDaoProvider)),
 );
 
 final proveedoresDaoProvider = Provider<ProveedoresDao>(

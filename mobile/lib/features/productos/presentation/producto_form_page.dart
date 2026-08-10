@@ -13,6 +13,7 @@ import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/estados.dart';
 import '../../auth/presentation/auth_providers.dart';
+import '../../categorias/presentation/categorias_page.dart';
 import '../data/imagen_producto.dart';
 import 'productos_providers.dart';
 
@@ -137,6 +138,13 @@ class _ProductoFormPageState extends ConsumerState<ProductoFormPage> {
     } catch (e) {
       if (mounted) mostrarMensaje(context, 'No se pudo abrir la cámara: $e', esError: true);
     }
+  }
+
+  /// Crea una categoría y la deja seleccionada, sin perder lo ya tecleado.
+  Future<void> _nuevaCategoria() async {
+    final uuid = await abrirFormularioCategoria(context);
+    if (uuid == null || !mounted) return;
+    setState(() => _categoriaUuid = uuid);
   }
 
   Future<void> _escanearCodigo() async {
@@ -333,18 +341,34 @@ class _ProductoFormPageState extends ConsumerState<ProductoFormPage> {
             ),
             const SizedBox(height: 14),
 
-            DropdownButtonFormField<String?>(
-              initialValue: _categoriaUuid,
-              decoration: const InputDecoration(
-                labelText: 'Categoría',
-                prefixIcon: Icon(Icons.category_outlined),
-              ),
-              items: [
-                const DropdownMenuItem(value: null, child: Text('Sin categoría')),
-                for (final c in categorias)
-                  DropdownMenuItem(value: c.uuid, child: Text(c.nombre)),
+            // Crear la categoría SIN salir del formulario. Descubrir que falta
+            // una es justo lo que pasa al dar de alta un producto, y obligar a
+            // abandonar lo tecleado para ir a otra pantalla es lo que hacía que
+            // todo acabara en «Sin categoría».
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String?>(
+                    initialValue: _categoriaUuid,
+                    decoration: const InputDecoration(
+                      labelText: 'Categoría',
+                      prefixIcon: Icon(Icons.category_outlined),
+                    ),
+                    items: [
+                      const DropdownMenuItem(value: null, child: Text('Sin categoría')),
+                      for (final c in categorias)
+                        DropdownMenuItem(value: c.uuid, child: Text(c.nombre)),
+                    ],
+                    onChanged: (v) => setState(() => _categoriaUuid = v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  onPressed: _nuevaCategoria,
+                  icon: const Icon(Icons.add_rounded),
+                  tooltip: 'Nueva categoría',
+                ),
               ],
-              onChanged: (v) => setState(() => _categoriaUuid = v),
             ),
             const SizedBox(height: 24),
 
