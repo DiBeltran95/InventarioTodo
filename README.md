@@ -326,3 +326,6 @@ accesible. Para no vender humo:
   extremos.
 - Gestión de categorías y proveedores desde la app (llegan por sincronización; se administran desde
   la API).
+
+
+  innovadigital007@gmail.com
