@@ -10,6 +10,7 @@ import '../../../../core/theme/motion.dart';
 import '../../../../core/widgets/estados.dart';
 import '../../data/ticket_pdf.dart';
 import '../ventas_providers.dart';
+import '../vista_ticket_page.dart';
 
 /// Confirmación de venta.
 ///
@@ -97,9 +98,12 @@ class VentaExitosa extends ConsumerWidget {
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () => _imprimir(context, negocio),
-                      icon: const Icon(Icons.print_outlined, size: 18),
-                      label: const Text('Ticket'),
+                      // Previsualizar en vez de saltar al diálogo de impresión:
+                      // desde la vista previa se puede imprimir igual, pero
+                      // primero se ve lo que se va a entregar.
+                      onPressed: () => abrirVistaTicket(context, venta),
+                      icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                      label: const Text('Ver ticket'),
                     ),
                   ),
                 ],
@@ -115,16 +119,6 @@ class VentaExitosa extends ConsumerWidget {
         ),
       ),
     );
-  }
-
-  Future<void> _imprimir(BuildContext context, String negocio) async {
-    try {
-      await TicketPdf.imprimir(venta, nombreNegocio: negocio);
-    } catch (e) {
-      if (context.mounted) {
-        mostrarMensaje(context, 'No se pudo imprimir: $e', esError: true);
-      }
-    }
   }
 
   Future<void> _compartir(BuildContext context, String negocio) async {

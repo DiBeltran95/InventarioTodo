@@ -11,6 +11,7 @@ import '../../../core/widgets/estados.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../data/ticket_pdf.dart';
 import 'ventas_providers.dart';
+import 'vista_ticket_page.dart';
 
 /// Detalle de una venta.
 ///
@@ -56,9 +57,11 @@ class VentaDetallePage extends ConsumerWidget {
                 tooltip: 'Compartir ticket',
               ),
               IconButton(
-                onPressed: () => _imprimir(context, venta, negocio),
-                icon: const Icon(Icons.print_outlined),
-                tooltip: 'Imprimir ticket',
+                // Abre la vista previa; desde ahí se imprime. Evita mandar a la
+                // impresora un documento que no se ha visto.
+                onPressed: () => abrirVistaTicket(context, venta),
+                icon: const Icon(Icons.receipt_long_outlined),
+                tooltip: 'Ver ticket',
               ),
               if (puedeAnular && !anulada && v.anulaAVentaUuid == null)
                 PopupMenuButton<String>(
@@ -169,18 +172,6 @@ class VentaDetallePage extends ConsumerWidget {
           ],
         ),
       );
-
-  Future<void> _imprimir(
-    BuildContext context,
-    VentaCompleta venta,
-    String negocio,
-  ) async {
-    try {
-      await TicketPdf.imprimir(venta, nombreNegocio: negocio);
-    } catch (e) {
-      if (context.mounted) mostrarMensaje(context, 'No se pudo imprimir: $e', esError: true);
-    }
-  }
 
   Future<void> _compartir(
     BuildContext context,

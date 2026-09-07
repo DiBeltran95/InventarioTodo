@@ -12,6 +12,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/estados.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../productos/presentation/productos_providers.dart';
+import '../domain/politica_precio.dart';
 
 /// Entrada de mercancía.
 ///
@@ -33,11 +34,16 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
   final _formulario = GlobalKey<FormState>();
   final _cantidad = TextEditingController(text: '1');
   final _costo = TextEditingController();
+  final _precioVenta = TextEditingController();
   final _lote = TextEditingController();
   final _documento = TextEditingController();
 
   String? _productoUuid;
   String? _proveedorUuid;
+
+  /// Precio de venta que tenía el producto al cargarlo. Sirve para no encolar
+  /// un cambio de catálogo cuando el usuario no tocó el campo.
+  Money? _precioVentaOriginal;
   String _tipo = 'ENTRADA';
   bool _guardando = false;
 
@@ -52,19 +58,40 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
   void dispose() {
     _cantidad.dispose();
     _costo.dispose();
+    _precioVenta.dispose();
     _lote.dispose();
     _documento.dispose();
     super.dispose();
   }
 
-  /// El costo se precarga con el de la última compra: en la mayoría de las
-  /// entradas no cambia, y reescribirlo cada vez es trabajo inútil.
+  /// Precarga costo y precio de venta con los del producto: en la mayoría de
+  /// las entradas no cambian, y reescribirlos cada vez es trabajo inútil. Lo
+  /// que importa es que estén **a la vista y editables** cuando sí cambian.
   Future<void> _precargarCosto() async {
     final uuid = _productoUuid;
     if (uuid == null) return;
     final item = await ref.read(productosDaoProvider).obtener(uuid);
-    if (item != null && mounted && _costo.text.isEmpty) {
+    if (item == null || !mounted) return;
+
+    if (_costo.text.isEmpty) {
       _costo.text = item.precioCompra.esCero ? '' : item.precioCompra.formatSinSimbolo();
+    }
+    if (_precioVenta.text.isEmpty) {
+      _precioVenta.text =
+          item.precioVenta.esCero ? '' : item.precioVenta.formatSinSimbolo();
+    }
+    setState(() => _precioVentaOriginal = item.precioVenta);
+  }
+
+  /// Lee un campo de importe tolerando lo que la gente teclea de verdad:
+  /// «12.500», «12500,50», «12500».
+  static Money? _importe(String texto) {
+    final limpio = texto.trim().replaceAll('.', '').replaceAll(',', '.');
+    if (limpio.isEmpty) return null;
+    try {
+      return Money.parse(limpio);
+    } on FormatException {
+      return null;
     }
   }
 
@@ -78,6 +105,7 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
     if (uuid == null) return;
     setState(() => _productoUuid = uuid);
     _costo.clear();
+    _precioVenta.clear();
     await _precargarCosto();
   }
 
@@ -103,6 +131,7 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
 
     setState(() => _productoUuid = resolucion.producto.uuid);
     _costo.clear();
+    _precioVenta.clear();
     await _precargarCosto();
   }
 
@@ -118,15 +147,22 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
 
     try {
       final cantidad = Cantidad.parse(_cantidad.text.replaceAll(',', '.'));
-      final costo = _costo.text.trim().isEmpty
-          ? null
-          : Money.parse(_costo.text.replaceAll('.', '').replaceAll(',', '.'));
+      final costo = _importe(_costo.text);
+
+      // La regla vive en `precioAActualizar` y está cubierta por pruebas: es
+      // corta pero sus efectos secundarios no se ven probando a mano.
+      final precioNuevo = precioAActualizar(
+        tipo: _tipo,
+        tecleado: _importe(_precioVenta.text),
+        original: _precioVentaOriginal,
+      );
 
       await ref.read(inventarioDaoProvider).registrarMovimiento(
             productoUuid: _productoUuid!,
             tipo: _tipo,
             cantidad: cantidad,
             costoUnitario: costo,
+            precioVenta: precioNuevo,
             proveedorUuid: _proveedorUuid,
             usuarioUuid: ref.read(sesionProvider).value?.usuarioUuid,
             lote: _lote.text.trim().isEmpty ? null : _lote.text.trim(),
@@ -138,7 +174,13 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
       await HapticFeedback.mediumImpact();
 
       if (!mounted) return;
-      mostrarMensaje(context, 'Movimiento registrado', esExito: true);
+      mostrarMensaje(
+        context,
+        precioNuevo == null
+            ? 'Movimiento registrado'
+            : 'Movimiento registrado · precio actualizado a ${precioNuevo.format()}',
+        esExito: true,
+      );
 
       // Reinicio para el siguiente artículo, conservando proveedor y documento:
       // toda la caja que se está recibiendo viene de la misma factura.
@@ -148,6 +190,8 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
       });
       _cantidad.text = '1';
       _costo.clear();
+      _precioVenta.clear();
+      _precioVentaOriginal = null;
       _lote.clear();
     } catch (e) {
       if (mounted) {
@@ -238,6 +282,9 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
                   child: TextFormField(
                     controller: _costo,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    // Repinta el margen: se decide el precio mirando el costo
+                    // que se acaba de teclear, no el de la compra anterior.
+                    onChanged: (_) => setState(() {}),
                     decoration: const InputDecoration(
                       labelText: 'Costo unitario',
                       prefixText: r'$ ',
@@ -257,14 +304,38 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
                 ),
               ],
             ),
+            // El precio de venta se edita AQUÍ y no en otra pantalla.
+            //
+            // Cuando el proveedor sube el costo, el momento en que uno decide
+            // repercutirlo es justo éste, con la factura delante. Obligar a
+            // salir a editar el producto hacía que la subida se aplazara y se
+            // acabara vendiendo con el margen viejo.
             if (_tipo == 'ENTRADA') ...[
-              const SizedBox(height: 8),
-              Text(
-                'El costo de la última entrada pasa a ser el costo de compra del '
-                'producto y se usa para calcular el margen.',
-                style: context.textos.bodySmall?.copyWith(
-                  color: context.colores.onSurfaceVariant,
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _precioVenta,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: 'Precio de venta',
+                  prefixText: r'$ ',
+                  helperText: _precioVentaOriginal == null
+                      ? 'Cámbialo si esta compra llegó más cara'
+                      : 'Actual: ${_precioVentaOriginal!.format()} · sólo se '
+                          'actualiza si lo cambias',
+                  helperMaxLines: 2,
                 ),
+                validator: (v) {
+                  if ((v ?? '').trim().isEmpty) return null;
+                  final valor = _importe(v!);
+                  if (valor == null) return 'Importe no válido';
+                  return valor.esNegativo ? 'No puede ser negativo' : null;
+                },
+              ),
+              const SizedBox(height: 10),
+              _ResumenMargen(
+                costo: _importe(_costo.text),
+                venta: _importe(_precioVenta.text),
               ),
             ],
             const SizedBox(height: 20),
@@ -574,3 +645,58 @@ final productosBusquedaProvider =
   (ref, busqueda) =>
       ref.watch(productosDaoProvider).observar(busqueda: busqueda, limite: 60),
 );
+
+/// Margen que deja la entrada, calculado mientras se teclea.
+///
+/// Es el dato que convierte «¿a cuánto lo pongo?» en una decisión y no en una
+/// corazonada. Vender por debajo del costo es un error caro y silencioso: si el
+/// aviso no aparece aquí, se descubre al cierre del mes.
+class _ResumenMargen extends StatelessWidget {
+  const _ResumenMargen({required this.costo, required this.venta});
+
+  final Money? costo;
+  final Money? venta;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = costo;
+    final v = venta;
+    if (c == null || v == null || c.esCero || v.esCero) {
+      return const SizedBox.shrink();
+    }
+
+    final margen = v - c;
+    final porcentaje = margen.centavos / c.centavos * 100;
+    final perdida = margen.esNegativo;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: perdida ? context.dominio.peligroContenedor : context.dominio.exitoContenedor,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            perdida ? Icons.warning_amber_rounded : Icons.trending_up_rounded,
+            size: 18,
+            color: perdida ? context.dominio.peligro : context.dominio.exito,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              perdida
+                  ? 'Con este precio venderías por debajo del costo '
+                      '(${margen.format()} por unidad)'
+                  : 'Margen ${margen.format()} por unidad · '
+                      '${porcentaje.toStringAsFixed(0)} %',
+              style: context.textos.labelMedium?.copyWith(
+                color: perdida ? context.dominio.peligro : context.dominio.exito,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

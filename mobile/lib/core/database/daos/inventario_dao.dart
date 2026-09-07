@@ -129,6 +129,16 @@ class InventarioDao {
     required String tipo,
     required Cantidad cantidad,
     Money? costoUnitario,
+
+    /// Precio de venta nuevo, si la reposición llega con otro costo y hay que
+    /// repercutirlo. `null` deja el precio como estaba.
+    ///
+    /// Va aquí y no en una llamada aparte para que el movimiento y el cambio de
+    /// precio compartan transacción: o entran los dos o no entra ninguno. Si
+    /// fueran dos operaciones sueltas y la app muriera en medio, quedaría el
+    /// stock cargado al costo nuevo pero vendiéndose al precio viejo.
+    Money? precioVenta,
+
     String? proveedorUuid,
     String? usuarioUuid,
     String? lote,
@@ -156,6 +166,30 @@ class InventarioDao {
       if (tipo == 'ENTRADA' && costoUnitario != null) {
         await (db.update(db.productos)..where((t) => t.uuid.equals(productoUuid)))
             .write(ProductosCompanion(precioCompra: Value(costoUnitario.centavos)));
+      }
+
+      // Precio de venta.
+      //
+      // El servidor NO lo deduce del movimiento —`MOVIMIENTO_CREAR` sólo lleva
+      // el costo—, así que se encola además un `PRODUCTO_ACTUALIZAR`, que es
+      // una operación que el backend ya sabe aplicar. Cambiar el precio es una
+      // modificación del catálogo, de modo que sí toca `updatedAt`: es lo que
+      // usa la resolución de conflictos para saber cuál gana.
+      if (precioVenta != null) {
+        final ahora = DateTime.now().toUtc();
+        await (db.update(db.productos)..where((t) => t.uuid.equals(productoUuid))).write(
+          ProductosCompanion(
+            precioVenta: Value(precioVenta.centavos),
+            updatedAt: Value(ahora),
+          ),
+        );
+
+        await outbox.encolar(
+          'PRODUCTO_ACTUALIZAR',
+          entidad: 'productos',
+          entidadUuid: productoUuid,
+          payload: {'uuid': productoUuid, 'precio_venta': precioVenta.toApi()},
+        );
       }
 
       await outbox.encolar(
