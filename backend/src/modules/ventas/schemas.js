@@ -38,6 +38,33 @@ export const crearVentaSchema = z.object({
   cliente_documento: z.string().max(40).nullish(),
   metodo_pago: z.enum(METODOS_PAGO).default('EFECTIVO'),
   monto_recibido: dinero.nullish(),
+
+  /**
+   * Desglose del cobro: con qué medios se pagó y cuánto por cada uno.
+   *
+   * Es **opcional a propósito**. Una app anterior a esta funcionalidad manda
+   * sólo `metodo_pago`, y esas ventas deben seguir entrando igual: en ese caso
+   * el servidor deriva un único pago por el total. Rechazarlas dejaría ventas
+   * atrapadas en la cola de dispositivos que aún no se han actualizado.
+   */
+  pagos: z
+    .array(
+      z.object({
+        uuid: z.string().uuid().optional(),
+        metodo_pago_uuid: z.string().uuid().nullish(),
+        metodo_nombre: z.string().min(1).max(60),
+        metodo_tipo: z
+          .enum(['EFECTIVO', 'TARJETA', 'TRANSFERENCIA', 'CREDITO', 'OTRO'])
+          .default('OTRO'),
+        monto: dinero,
+        monto_recibido: dinero.nullish(),
+        cambio: dinero.nullish(),
+        referencia: z.string().max(80).nullish(),
+      }),
+    )
+    .min(1)
+    .max(10)
+    .optional(),
   notas: z.string().max(500).nullish(),
   fecha: z.string().datetime({ offset: true }).optional(),
   fecha_local: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

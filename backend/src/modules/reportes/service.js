@@ -101,6 +101,38 @@ export async function ventasPorEmpleado({ desde, hasta }) {
   );
 }
 
+/**
+ * Cuánto entró por cada medio de pago.
+ *
+ * Sale de `venta_pagos` y no de `ventas.metodo_pago`: en un cobro mixto esa
+ * columna sólo dice 'MIXTO', que no responde a la pregunta que se hace al
+ * cerrar la caja —«¿cuánto efectivo debería haber en el cajón y cuánto tiene
+ * que aparecer en el extracto de Nequi?»—.
+ *
+ * Las anuladas quedan fuera: el dinero de una venta anulada se devolvió.
+ */
+export async function ingresosPorMetodoPago({ desde, hasta }) {
+  return query(
+    `SELECT vp.metodo_nombre                         AS metodo,
+            vp.metodo_tipo                           AS tipo,
+            mp.uuid                                  AS metodo_pago_uuid,
+            mp.color                                 AS color,
+            COUNT(*)                                 AS num_pagos,
+            COUNT(DISTINCT vp.venta_id)              AS num_ventas,
+            COALESCE(SUM(vp.monto), 0)               AS total
+       FROM venta_pagos vp
+       JOIN ventas v ON v.id = vp.venta_id
+       LEFT JOIN metodos_pago mp ON mp.id = vp.metodo_pago_id
+      WHERE v.estado = 'COMPLETADA'
+        AND v.deleted_at IS NULL
+        AND v.anula_a_venta_id IS NULL
+        AND v.fecha_local BETWEEN ? AND ?
+      GROUP BY vp.metodo_nombre, vp.metodo_tipo, mp.uuid, mp.color
+      ORDER BY total DESC`,
+    [desde, hasta],
+  );
+}
+
 export async function stockBajo({ limite = 50 } = {}) {
   return query('SELECT * FROM v_productos_stock_bajo LIMIT ?', [limite]);
 }

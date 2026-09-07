@@ -12,6 +12,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import rutasAuth from './modules/auth/routes.js';
 import rutasCategorias from './modules/categorias/index.js';
 import rutasProveedores from './modules/proveedores/index.js';
+import rutasMetodosPago from './modules/metodosPago/index.js';
 import rutasProductos from './modules/productos/routes.js';
 import rutasInventario from './modules/inventario/routes.js';
 import rutasVentas from './modules/ventas/routes.js';
@@ -100,6 +101,7 @@ export function crearApp() {
   api.use('/auth', rutasAuth);
   api.use('/categorias', rutasCategorias);
   api.use('/proveedores', rutasProveedores);
+  api.use('/metodos-pago', rutasMetodosPago);
   api.use('/productos', rutasProductos);
   api.use('/inventario', rutasInventario);
   api.use('/ventas', rutasVentas);

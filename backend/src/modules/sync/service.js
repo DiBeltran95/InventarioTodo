@@ -12,6 +12,7 @@ import * as inventario from '../inventario/service.js';
 import * as ventas from '../ventas/service.js';
 import { repoCategorias } from '../categorias/index.js';
 import { repoProveedores } from '../proveedores/index.js';
+import { repoMetodosPago } from '../metodosPago/index.js';
 
 /**
  * Manejadores de operaciones de subida.
@@ -35,6 +36,10 @@ const MANEJADORES = {
   PROVEEDOR_CREAR: (conn, p) => repoProveedores.crearOActualizar(conn, p),
   PROVEEDOR_ACTUALIZAR: (conn, p) => repoProveedores.actualizar(conn, p.uuid, p),
   PROVEEDOR_ELIMINAR: (conn, p) => repoProveedores.eliminar(conn, p.uuid),
+
+  METODO_PAGO_CREAR: (conn, p) => repoMetodosPago.crearOActualizar(conn, p),
+  METODO_PAGO_ACTUALIZAR: (conn, p) => repoMetodosPago.actualizar(conn, p.uuid, p),
+  METODO_PAGO_ELIMINAR: (conn, p) => repoMetodosPago.eliminar(conn, p.uuid),
 
   MOVIMIENTO_CREAR: (conn, p, ctx) => inventario.crearMovimiento(conn, p, ctx),
   CONTEO_AJUSTAR: (conn, p, ctx) => inventario.ajustarPorConteo(conn, p, ctx),
@@ -72,6 +77,9 @@ const ROL_MINIMO = Object.freeze({
   PROVEEDOR_CREAR: ROLES.ADMIN,
   PROVEEDOR_ACTUALIZAR: ROLES.ADMIN,
   PROVEEDOR_ELIMINAR: ROLES.ADMIN,
+  METODO_PAGO_CREAR: ROLES.ADMIN,
+  METODO_PAGO_ACTUALIZAR: ROLES.ADMIN,
+  METODO_PAGO_ELIMINAR: ROLES.ADMIN,
   MOVIMIENTO_CREAR: ROLES.ADMIN,
   CONTEO_AJUSTAR: ROLES.ADMIN,
   VENTA_ANULAR: ROLES.ADMIN,
@@ -85,6 +93,7 @@ const ENTIDAD_DE = {
   CODIGO_CREAR: 'producto_codigos', CODIGO_ELIMINAR: 'producto_codigos',
   CATEGORIA_CREAR: 'categorias', CATEGORIA_ACTUALIZAR: 'categorias', CATEGORIA_ELIMINAR: 'categorias',
   PROVEEDOR_CREAR: 'proveedores', PROVEEDOR_ACTUALIZAR: 'proveedores', PROVEEDOR_ELIMINAR: 'proveedores',
+  METODO_PAGO_CREAR: 'metodos_pago', METODO_PAGO_ACTUALIZAR: 'metodos_pago', METODO_PAGO_ELIMINAR: 'metodos_pago',
   MOVIMIENTO_CREAR: 'movimientos_inventario', CONTEO_AJUSTAR: 'movimientos_inventario',
   VENTA_CREAR: 'ventas', VENTA_ANULAR: 'ventas',
 };

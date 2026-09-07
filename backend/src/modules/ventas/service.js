@@ -30,6 +30,105 @@ async function prefijoDelDispositivo(conn, dispositivoUuid) {
   return d?.prefijo_folio ?? 'WEB';
 }
 
+/**
+ * Escribe el desglose del cobro y deja `ventas.metodo_pago` coherente.
+ *
+ * Dos invariantes que se comprueban aquí y no más arriba:
+ *
+ *  · **La suma de los pagos es exactamente el total.** Se compara en centavos
+ *    enteros, nunca en coma flotante: aceptar un cobro que no cuadra por un
+ *    peso descuadra la caja del día y nadie sabe dónde buscarlo.
+ *  · **Cada pago guarda el NOMBRE del medio**, no sólo su id. Si mañana se
+ *    renombra «Nequi» o se da de baja, el ticket histórico debe seguir
+ *    diciendo por dónde entró el dinero.
+ *
+ * La columna `ventas.metodo_pago` se conserva para no romper los tickets y
+ * reportes que ya la leían: con un solo medio guarda su tipo, con varios,
+ * 'MIXTO'.
+ */
+async function registrarPagos(conn, { ventaId, total, numero, pagos, metodoLegado, montoRecibido, cambio }) {
+  // Sin desglose (app anterior a esta funcionalidad): se deriva un pago único
+  // por el total, para que el histórico quede completo igualmente.
+  const lista =
+    pagos && pagos.length
+      ? pagos
+      : [
+          {
+            metodo_nombre: etiquetaMetodo(metodoLegado),
+            metodo_tipo: metodoLegado === 'MIXTO' ? 'OTRO' : metodoLegado,
+            monto: fromCents(total),
+            monto_recibido: montoRecibido,
+            cambio,
+          },
+        ];
+
+  if (pagos && pagos.length) {
+    const suma = sumar(lista.map((p) => toCents(p.monto)));
+    if (suma !== total) {
+      throw badRequest(
+        'PAGOS_NO_CUADRAN',
+        `Los pagos suman ${fromCents(suma)} y la venta ${numero} totaliza ${fromCents(total)}`,
+      );
+    }
+  }
+
+  // Los uuid de los medios se resuelven de una vez: un SELECT por pago sería
+  // una consulta extra en el camino crítico del cobro.
+  const uuids = [...new Set(lista.map((p) => p.metodo_pago_uuid).filter(Boolean))];
+  const idsPorUuid = new Map();
+  if (uuids.length) {
+    const filas = await txQuery(
+      conn,
+      `SELECT id, uuid FROM metodos_pago WHERE uuid IN (${uuids.map(() => '?').join(',')})`,
+      uuids,
+    );
+    for (const f of filas) idsPorUuid.set(f.uuid, f.id);
+  }
+
+  for (const pago of lista) {
+    await txExecute(
+      conn,
+      `INSERT INTO venta_pagos
+         (uuid, venta_id, metodo_pago_id, metodo_nombre, metodo_tipo,
+          monto, monto_recibido, cambio, referencia)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [
+        pago.uuid ?? nuevoUuid(),
+        ventaId,
+        idsPorUuid.get(pago.metodo_pago_uuid) ?? null,
+        pago.metodo_nombre,
+        pago.metodo_tipo ?? 'OTRO',
+        pago.monto,
+        pago.monto_recibido ?? null,
+        pago.cambio ?? null,
+      ],
+    );
+  }
+
+  // `metodo_pago` es un ENUM heredado y sólo admite sus cinco valores; el tipo
+  // del medio encaja porque se definió con el mismo vocabulario.
+  const resumen =
+    lista.length > 1 ? 'MIXTO' : normalizarEnumLegado(lista[0].metodo_tipo);
+  await txExecute(conn, 'UPDATE ventas SET metodo_pago = ? WHERE id = ?', [resumen, ventaId]);
+}
+
+const ETIQUETAS_LEGADO = {
+  EFECTIVO: 'Efectivo',
+  TARJETA: 'Tarjeta',
+  TRANSFERENCIA: 'Transferencia',
+  CREDITO: 'Crédito',
+  MIXTO: 'Mixto',
+};
+
+function etiquetaMetodo(codigo) {
+  return ETIQUETAS_LEGADO[codigo] ?? codigo;
+}
+
+/** 'OTRO' no existe en el ENUM heredado; se guarda como 'EFECTIVO'. */
+function normalizarEnumLegado(tipo) {
+  return ['EFECTIVO', 'TARJETA', 'TRANSFERENCIA', 'CREDITO'].includes(tipo) ? tipo : 'EFECTIVO';
+}
+
 async function siguienteFolio(conn, prefijo) {
   const fila = await txQueryOne(conn, 'SELECT fn_siguiente_folio(?) AS folio', [prefijo]);
   return fila.folio;
@@ -194,6 +293,21 @@ export async function crearVenta(conn, datos, ctx) {
       ],
     );
   }
+
+  // 4.b) Desglose del cobro.
+  //
+  // Siempre se escribe al menos una fila, incluso con un solo medio: así los
+  // reportes por medio de pago miran en un único sitio y no tienen que tratar
+  // aparte el caso simple.
+  await registrarPagos(conn, {
+    ventaId,
+    total,
+    numero,
+    pagos: datos.pagos,
+    metodoLegado: datos.metodo_pago ?? 'EFECTIVO',
+    montoRecibido,
+    cambio,
+  });
 
   // 5) Movimientos de inventario. Los triggers descuentan el stock.
   //    Se reutiliza el uuid que mandó el dispositivo: si el servidor inventara
@@ -456,6 +570,17 @@ async function obtenerVentaTx(conn, uuid) {
       WHERE d.venta_id = ? ORDER BY d.linea`,
     [venta._id],
   );
+  // Con qué medios se cobró. Es la trazabilidad que permite responder «esta
+  // venta, ¿entró por Nequi o en efectivo?» un mes después.
+  const pagos = await txQuery(
+    conn,
+    `SELECT vp.uuid, mp.uuid AS metodo_pago_uuid, vp.metodo_nombre, vp.metodo_tipo,
+            vp.monto, vp.monto_recibido, vp.cambio, vp.referencia
+       FROM venta_pagos vp
+       LEFT JOIN metodos_pago mp ON mp.id = vp.metodo_pago_id
+      WHERE vp.venta_id = ? ORDER BY vp.id`,
+    [venta._id],
+  );
   delete venta._id;
-  return { ...venta, detalles };
+  return { ...venta, detalles, pagos };
 }

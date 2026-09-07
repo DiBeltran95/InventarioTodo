@@ -19,6 +19,7 @@ import 'dotenv/config';
 import mysql from 'mysql2/promise';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { fileURLToPath } from 'node:url';
 import readline from 'node:readline/promises';
 
@@ -235,7 +236,20 @@ async function main() {
   await conn.end();
 }
 
-main().catch((err) => {
-  console.error(`${c.red}Fallo la migración:${c.reset}`, err);
-  process.exit(1);
-});
+/**
+ * Sólo se ejecuta cuando el script se INVOCA, nunca cuando se importa.
+ *
+ * `partirSql` está exportado para poder probarlo, y sin esta guarda un simple
+ * `import` desde otro archivo abría una conexión a la base configurada en .env
+ * —producción, si eso es lo que hay en .env— y le aplicaba el esquema entero.
+ * Importar un módulo no puede tener ese efecto.
+ */
+const invocadoDirectamente =
+  process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+
+if (invocadoDirectamente) {
+  main().catch((err) => {
+    console.error(`${c.red}Fallo la migración:${c.reset}`, err);
+    process.exit(1);
+  });
+}

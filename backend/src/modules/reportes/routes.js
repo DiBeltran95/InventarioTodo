@@ -55,6 +55,21 @@ router.get(
 );
 
 router.get(
+  '/metodos-pago',
+  validar({
+    query: z.object({
+      periodo: z.enum(['hoy', 'ayer', 'semana', 'mes', 'trimestre', 'anio']).optional(),
+      desde: fecha.optional(),
+      hasta: fecha.optional(),
+    }),
+  }),
+  asyncHandler(async (req, res) => {
+    const { desde, hasta } = rango(req.validated.query);
+    ok(res, await servicio.ingresosPorMetodoPago({ desde, hasta }));
+  }),
+);
+
+router.get(
   '/top-productos',
   validar({
     query: z.object({

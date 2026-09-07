@@ -55,6 +55,17 @@ export const CONSULTAS = {
        ORDER BY pr.updated_at, pr.id LIMIT ?`,
   },
 
+  metodos_pago: {
+    horizonte: false,
+    sql: `
+      SELECT mp.id AS _id, mp.uuid, mp.nombre, mp.tipo, mp.requiere_referencia,
+             mp.qr_url, mp.instrucciones, mp.color, mp.orden, mp.activo,
+             mp.updated_at, mp.deleted_at
+        FROM metodos_pago mp
+       WHERE ${KEYSET('mp')}
+       ORDER BY mp.updated_at, mp.id LIMIT ?`,
+  },
+
   productos: {
     horizonte: false,
     sql: `
@@ -110,6 +121,19 @@ export const CONSULTAS = {
         LEFT JOIN productos p ON p.id = d.producto_id
        WHERE ${KEYSET('d')} AND v.fecha_local >= ?
        ORDER BY d.updated_at, d.id LIMIT ?`,
+  },
+
+  venta_pagos: {
+    horizonte: true,
+    sql: `
+      SELECT vp.id AS _id, vp.uuid, v.uuid AS venta_uuid,
+             mp.uuid AS metodo_pago_uuid, vp.metodo_nombre, vp.metodo_tipo,
+             vp.monto, vp.monto_recibido, vp.cambio, vp.referencia, vp.updated_at
+        FROM venta_pagos vp
+        JOIN ventas v ON v.id = vp.venta_id
+        LEFT JOIN metodos_pago mp ON mp.id = vp.metodo_pago_id
+       WHERE ${KEYSET('vp')} AND v.fecha_local >= ?
+       ORDER BY vp.updated_at, vp.id LIMIT ?`,
   },
 
   movimientos_inventario: {
