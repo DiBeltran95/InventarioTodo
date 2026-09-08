@@ -30,11 +30,61 @@ class LineaParaVender {
   final Money descuento;
 }
 
+/// Un pago del cobro: con qué medio y cuánto.
+///
+/// Guarda el NOMBRE del medio además de su uuid. Si mañana se renombra «Nequi»
+/// o se da de baja, el ticket ya entregado no puede cambiar: es un requisito
+/// contable, no una desnormalización perezosa.
+class PagoDeVenta {
+  const PagoDeVenta({
+    required this.metodoUuid,
+    required this.metodoNombre,
+    required this.metodoTipo,
+    required this.monto,
+    this.montoRecibido,
+    this.referencia,
+  });
+
+  final String? metodoUuid;
+  final String metodoNombre;
+  final String metodoTipo;
+  final Money monto;
+
+  /// Sólo en efectivo. Va por pago y no por venta porque en un cobro mixto
+  /// únicamente una parte se paga en efectivo.
+  final Money? montoRecibido;
+
+  final String? referencia;
+
+  bool get esEfectivo => metodoTipo == 'EFECTIVO';
+
+  /// Vueltas de ESTE pago. Nunca negativas: si entregó de menos, no hay cambio.
+  Money get cambio {
+    final recibido = montoRecibido;
+    if (!esEfectivo || recibido == null || recibido <= monto) return const Money.cero();
+    return recibido - monto;
+  }
+}
+
 class VentaCompleta {
-  const VentaCompleta({required this.venta, required this.detalles});
+  const VentaCompleta({
+    required this.venta,
+    required this.detalles,
+    this.pagos = const [],
+  });
 
   final Venta venta;
   final List<VentaDetalle> detalles;
+
+  /// Con qué medios se cobró. Es la trazabilidad que responde «esta venta,
+  /// ¿entró por Nequi o en efectivo?» un mes después.
+  final List<VentaPago> pagos;
+
+  bool get fueMixto => pagos.length > 1;
+
+  /// Vueltas totales entregadas, sumando las de cada pago en efectivo.
+  Money get cambioTotal =>
+      Money.sumar(pagos.map((p) => Money(p.cambio ?? 0)));
 
   Money get total => Money(venta.total);
   Money get subtotal => Money(venta.subtotal);
@@ -43,6 +93,15 @@ class VentaCompleta {
   bool get pendienteDeSync => venta.sincronizadaEn == null;
   bool get anulada => venta.estado == 'ANULADA';
 }
+
+String _etiquetaLegado(String codigo) => switch (codigo) {
+      'EFECTIVO' => 'Efectivo',
+      'TARJETA' => 'Tarjeta',
+      'TRANSFERENCIA' => 'Transferencia',
+      'CREDITO' => 'Fiado',
+      'MIXTO' => 'Mixto',
+      _ => codigo,
+    };
 
 class VentasDao {
   VentasDao(this.db, this.outbox, this.inventario);
@@ -63,10 +122,18 @@ class VentasDao {
   ///
   /// Si algo falla —o la app muere— se revierte entero: nunca queda una venta
   /// sin encolar ni un encolado sin venta.
+  /// Pagos de una venta, en el orden en que se cobraron.
+  Future<List<VentaPago>> pagosDe(String ventaUuid) =>
+      (db.select(db.ventaPagos)..where((t) => t.ventaUuid.equals(ventaUuid))).get();
+
   Future<VentaCompleta> registrarVenta({
     required List<LineaParaVender> lineas,
     String metodoPago = 'EFECTIVO',
     Money? montoRecibido,
+
+    /// Desglose del cobro. Si viene vacío se deriva un pago único por el total,
+    /// para que el histórico quede completo igualmente.
+    List<PagoDeVenta> pagos = const [],
     String? clienteNombre,
     String? clienteDocumento,
     String? notas,
@@ -198,6 +265,74 @@ class VentasDao {
       }
 
       // 6. Encolado — en esta misma transacción, no después.
+      // 5.b) Desglose del cobro.
+      //
+      // Siempre se escribe al menos una fila, incluso con un solo medio: así
+      // el reporte de ingresos por medio mira en un único sitio y no tiene que
+      // tratar aparte el caso simple.
+      //
+      // Los montos ya vienen cuadrados desde la pantalla de cobro; aquí se
+      // vuelve a comprobar porque esta función también se llama desde código y
+      // una venta que no cuadra descuadra la caja del día.
+      final desglose = pagos.isNotEmpty
+          ? pagos
+          : [
+              PagoDeVenta(
+                metodoUuid: null,
+                metodoNombre: _etiquetaLegado(metodoPago),
+                metodoTipo: metodoPago == 'MIXTO' ? 'OTRO' : metodoPago,
+                monto: total,
+                montoRecibido: montoRecibido,
+              ),
+            ];
+
+      final sumaPagos = Money.sumar(desglose.map((p) => p.monto));
+      if (sumaPagos != total) {
+        throw ArgumentError(
+          'Los pagos suman ${sumaPagos.format()} y la venta totaliza ${total.format()}',
+        );
+      }
+
+      final pagosPayload = <Map<String, dynamic>>[];
+      for (final pago in desglose) {
+        final pagoUuid = _uuid.v7();
+        await db.into(db.ventaPagos).insert(
+              VentaPagosCompanion.insert(
+                uuid: pagoUuid,
+                ventaUuid: ventaUuid,
+                metodoPagoUuid: Value(pago.metodoUuid),
+                metodoNombre: pago.metodoNombre,
+                metodoTipo: Value(pago.metodoTipo),
+                monto: pago.monto.centavos,
+                montoRecibido: Value(pago.montoRecibido?.centavos),
+                cambio: Value(pago.esEfectivo ? pago.cambio.centavos : null),
+                referencia: Value(pago.referencia),
+              ),
+            );
+
+        pagosPayload.add({
+          'uuid': pagoUuid,
+          'metodo_pago_uuid': pago.metodoUuid,
+          'metodo_nombre': pago.metodoNombre,
+          'metodo_tipo': pago.metodoTipo,
+          'monto': pago.monto.toApi(),
+          'monto_recibido': pago.montoRecibido?.toApi(),
+          'cambio': pago.esEfectivo ? pago.cambio.toApi() : null,
+          'referencia': pago.referencia,
+        });
+      }
+
+      // La columna `metodoPago` es heredada y sigue existiendo porque el ticket
+      // y los reportes antiguos la leen. Con varios medios guarda 'MIXTO'; el
+      // desglose real vive en `venta_pagos`.
+      if (desglose.length > 1) {
+        await (db.update(db.ventas)..where((t) => t.uuid.equals(ventaUuid)))
+            .write(const VentasCompanion(metodoPago: Value('MIXTO')));
+      } else if (pagos.isNotEmpty) {
+        await (db.update(db.ventas)..where((t) => t.uuid.equals(ventaUuid)))
+            .write(VentasCompanion(metodoPago: Value(desglose.first.metodoTipo)));
+      }
+
       await outbox.encolar(
         'VENTA_CREAR',
         entidad: 'ventas',
@@ -214,6 +349,7 @@ class VentasDao {
           'fecha_local': fechaLocal,
           'creada_offline': true,
           'lineas': lineasPayload,
+          'pagos': pagosPayload,
         },
       );
 
@@ -223,7 +359,11 @@ class VentasDao {
             ..orderBy([(t) => OrderingTerm.asc(t.linea)]))
           .get();
 
-      return VentaCompleta(venta: venta, detalles: detalles);
+      return VentaCompleta(
+        venta: venta,
+        detalles: detalles,
+        pagos: await pagosDe(ventaUuid),
+      );
     });
   }
 
@@ -375,7 +515,11 @@ class VentasDao {
             ..where((t) => t.ventaUuid.equals(uuid))
             ..orderBy([(t) => OrderingTerm.asc(t.linea)]))
           .get();
-      return VentaCompleta(venta: venta, detalles: detalles);
+      return VentaCompleta(
+        venta: venta,
+        detalles: detalles,
+        pagos: await pagosDe(uuid),
+      );
     });
   }
 
@@ -387,7 +531,7 @@ class VentasDao {
           ..where((t) => t.ventaUuid.equals(uuid))
           ..orderBy([(t) => OrderingTerm.asc(t.linea)]))
         .get();
-    return VentaCompleta(venta: venta, detalles: detalles);
+    return VentaCompleta(venta: venta, detalles: detalles, pagos: await pagosDe(uuid));
   }
 
   Stream<int> contarPendientesDeSync() {

@@ -132,11 +132,11 @@ class CarritoPage extends ConsumerWidget {
     final pago = resultado;
 
     final notifier = ref.read(carritoProvider.notifier);
-    notifier.fijarMetodoPago(pago.metodo);
+    notifier.fijarMetodoPago(pago.metodoLegado);
 
     late VentaCompleta venta;
     try {
-      venta = await notifier.cobrar(montoRecibido: pago.recibido);
+      venta = await notifier.cobrar(pagos: pago.pagos);
     } catch (e) {
       if (context.mounted) {
         mostrarMensaje(context, 'No se pudo registrar la venta: $e', esError: true);

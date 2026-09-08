@@ -75,11 +75,27 @@ class TicketPdf {
             pw.SizedBox(height: 3),
             _fila('TOTAL', Money(v.total).format(), negrita: true, tamano: 12),
             _divisor(),
-            _fila('Pago', _metodo(v.metodoPago)),
-            if (v.montoRecibido != null)
-              _fila('Recibido', Money(v.montoRecibido!).format()),
-            if (v.cambio != null && v.cambio! > 0)
-              _fila('Cambio', Money(v.cambio!).format(), negrita: true),
+
+            // Desglose del cobro. En un pago mixto el cliente necesita ver
+            // cuánto puso por cada medio: es lo que le permite comprobar el
+            // cargo en su banco y el efectivo que entregó.
+            if (venta.pagos.isEmpty) ...[
+              _fila('Pago', _metodo(v.metodoPago)),
+              if (v.montoRecibido != null)
+                _fila('Recibido', Money(v.montoRecibido!).format()),
+              if (v.cambio != null && v.cambio! > 0)
+                _fila('Cambio', Money(v.cambio!).format(), negrita: true),
+            ] else ...[
+              for (final pago in venta.pagos) ...[
+                _fila(pago.metodoNombre, Money(pago.monto).format()),
+                if (pago.referencia != null)
+                  _fila('  ref.', pago.referencia!, tamano: 7),
+                if (pago.montoRecibido != null && (pago.cambio ?? 0) > 0)
+                  _fila('  recibido', Money(pago.montoRecibido!).format(), tamano: 7),
+              ],
+              if (!venta.cambioTotal.esCero)
+                _fila('Cambio', venta.cambioTotal.format(), negrita: true),
+            ],
 
             pw.SizedBox(height: 10),
             // Marca honesta del estado real del documento. Si la venta aún no

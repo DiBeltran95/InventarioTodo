@@ -196,6 +196,13 @@ class AjustesPage extends ConsumerWidget {
                   onTap: () => context.push(Rutas.usuarios),
                 ),
                 ListTile(
+                  leading: const Icon(Icons.account_balance_wallet_outlined),
+                  title: const Text('Medios de pago'),
+                  subtitle: const Text('Con qué cobras y el QR del cliente'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push(Rutas.metodosPago),
+                ),
+                ListTile(
                   leading: const Icon(Icons.category_outlined),
                   title: const Text('Categorías'),
                   subtitle: const Text('Cómo se agrupa el catálogo'),

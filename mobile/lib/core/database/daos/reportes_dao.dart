@@ -116,6 +116,25 @@ class RendimientoEmpleado {
   bool get requiereAtencion => anuladas > 0;
 }
 
+/// Lo que entró por un medio de pago en un periodo.
+class IngresoPorMetodo {
+  const IngresoPorMetodo({
+    required this.metodo,
+    required this.tipo,
+    required this.numPagos,
+    required this.numVentas,
+    required this.total,
+  });
+
+  final String metodo;
+  final String tipo;
+  final int numPagos;
+  final int numVentas;
+  final Money total;
+
+  bool get esEfectivo => tipo == 'EFECTIVO';
+}
+
 class ReportesDao {
   ReportesDao(this.db);
 
@@ -381,6 +400,50 @@ class ReportesDao {
               numVentas: f.read<int>('n'),
             ))
         .toList();
+  }
+
+  /// Cuánto entró por cada medio de pago.
+  ///
+  /// Sale de `venta_pagos` y no de `ventas.metodoPago`: en un cobro mixto esa
+  /// columna sólo dice 'MIXTO', que no responde a la pregunta que se hace al
+  /// cerrar la caja —«¿cuánto efectivo debería haber en el cajón y cuánto tiene
+  /// que aparecer en el extracto de Nequi?»—.
+  ///
+  /// Las anuladas quedan fuera: ese dinero se devolvió.
+  Stream<List<IngresoPorMetodo>> observarIngresosPorMetodo({
+    required String desde,
+    required String hasta,
+  }) {
+    return db
+        .customSelect(
+          '''
+          SELECT p.metodo_nombre                       AS metodo,
+                 p.metodo_tipo                         AS tipo,
+                 COUNT(*)                              AS num_pagos,
+                 COUNT(DISTINCT p.venta_uuid)          AS num_ventas,
+                 COALESCE(SUM(p.monto), 0)             AS total
+            FROM venta_pagos p
+            JOIN ventas v ON v.uuid = p.venta_uuid
+           WHERE v.estado = 'COMPLETADA'
+             AND v.deleted_at IS NULL
+             AND v.anula_a_venta_uuid IS NULL
+             AND v.fecha_local BETWEEN ? AND ?
+           GROUP BY p.metodo_nombre, p.metodo_tipo
+           ORDER BY total DESC
+          ''',
+          variables: [Variable<String>(desde), Variable<String>(hasta)],
+          readsFrom: {db.ventaPagos, db.ventas},
+        )
+        .watch()
+        .map((filas) => filas
+            .map((f) => IngresoPorMetodo(
+                  metodo: f.read<String>('metodo'),
+                  tipo: f.read<String>('tipo'),
+                  numPagos: f.read<int>('num_pagos'),
+                  numVentas: f.read<int>('num_ventas'),
+                  total: Money(f.read<int>('total')),
+                ))
+            .toList());
   }
 
   /// Valorización del inventario por categoría.

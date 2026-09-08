@@ -244,6 +244,72 @@ class Alertas extends Table {
   Set<Column> get primaryKey => {uuid};
 }
 
+/// Medios de pago del negocio.
+///
+/// Bajan del servidor como el resto del catálogo, así que el vendedor puede
+/// cobrar **sin conexión** con los medios que su negocio tenga configurados.
+@DataClassName('MetodoPago')
+class MetodosPago extends Table {
+  TextColumn get uuid => text()();
+  TextColumn get nombre => text()();
+
+  /// EFECTIVO · TARJETA · TRANSFERENCIA · CREDITO · OTRO
+  ///
+  /// El nombre es libre («Nequi», «Llave Bre-B»); el tipo es lo acotado, porque
+  /// gobierna el comportamiento del cobro: sólo EFECTIVO calcula vueltas, sólo
+  /// CREDITO deja saldo pendiente.
+  TextColumn get tipo => text().withDefault(const Constant('OTRO'))();
+
+  BoolColumn get requiereReferencia => boolean().withDefault(const Constant(false))();
+
+  /// URL del QR que el vendedor le muestra al cliente. Es del servidor y no una
+  /// ruta local a propósito: lo configura el administrador desde su teléfono y
+  /// tiene que verse en el del vendedor.
+  TextColumn get qrUrl => text().nullable()();
+
+  /// Copia del QR ya descargada. Sin ella, mostrarlo exigiría red justo en el
+  /// momento de cobrar, que es cuando menos se puede depender de ella.
+  TextColumn get qrLocal => text().nullable()();
+
+  TextColumn get instrucciones => text().nullable()();
+  TextColumn get color => text().withDefault(const Constant('#0E6B5C'))();
+  IntColumn get orden => integer().withDefault(const Constant(0))();
+  BoolColumn get activo => boolean().withDefault(const Constant(true))();
+
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get deletedAt => dateTime().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {uuid};
+}
+
+/// Desglose del cobro de una venta: con qué medios se pagó y cuánto por cada
+/// uno. La suma de los montos es igual a `ventas.total`.
+@DataClassName('VentaPago')
+@TableIndex(name: 'idx_pagos_venta', columns: {#ventaUuid})
+class VentaPagos extends Table {
+  TextColumn get uuid => text()();
+  TextColumn get ventaUuid => text()();
+  TextColumn get metodoPagoUuid => text().nullable()();
+
+  /// Instantánea del nombre, igual que `venta_detalles.descripcion`. Si mañana
+  /// se renombra «Nequi» o se da de baja, el ticket histórico NO debe cambiar.
+  TextColumn get metodoNombre => text()();
+  TextColumn get metodoTipo => text().withDefault(const Constant('OTRO'))();
+
+  IntColumn get monto => integer()();
+
+  /// Sólo en efectivo. Van por pago y no por venta porque en un cobro mixto
+  /// únicamente una parte se paga en efectivo.
+  IntColumn get montoRecibido => integer().nullable()();
+  IntColumn get cambio => integer().nullable()();
+
+  TextColumn get referencia => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {uuid};
+}
+
 // ─── Sincronización ──────────────────────────────────────────────────────────
 
 /// Cola de salida.
@@ -326,6 +392,8 @@ class EstadoApp extends Table {
     ProductoCodigos,
     Ventas,
     VentaDetalles,
+    VentaPagos,
+    MetodosPago,
     Movimientos,
     Alertas,
     SyncOutbox,
@@ -339,7 +407,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'inventario_pos'));
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -349,6 +417,23 @@ class AppDatabase extends _$AppDatabase {
             const EstadoAppCompanion(id: Value(1)),
             mode: InsertMode.insertOrIgnore,
           );
+        },
+
+        /// Actualización del esquema local.
+        ///
+        /// **Sólo se AÑADE.** En este dispositivo puede haber ventas que aún no
+        /// han llegado al servidor: son el único ejemplar que existe de ese
+        /// dinero. Borrar y recrear la base para «empezar limpio» las
+        /// destruiría sin posibilidad de recuperarlas.
+        ///
+        /// Sin este bloque, subir `schemaVersion` lanzaría al abrir la app en
+        /// cualquier instalación ya existente.
+        onUpgrade: (m, desde, hasta) async {
+          // v2 · Medios de pago configurables y cobro repartido entre varios.
+          if (desde < 2) {
+            await m.createTable(metodosPago);
+            await m.createTable(ventaPagos);
+          }
         },
         beforeOpen: (details) async {
           // Las claves foráneas no están declaradas entre tablas a propósito

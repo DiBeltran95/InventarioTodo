@@ -69,6 +69,16 @@ final topReporteProvider = StreamProvider<List<ProductoVendido>>((ref) {
       );
 });
 
+/// Cuánto entró por cada medio de pago en el periodo elegido.
+final ingresosPorMetodoProvider =
+    StreamProvider<List<IngresoPorMetodo>>((ref) {
+  final periodo = ref.watch(periodoReporteProvider);
+  return ref.watch(reportesDaoProvider).observarIngresosPorMetodo(
+        desde: periodo.desde,
+        hasta: Fechas.hoy(),
+      );
+});
+
 final valorizacionProvider = StreamProvider<
     List<({String categoria, int productos, Money costo, Money venta})>>(
   (ref) => ref.watch(reportesDaoProvider).observarValorizacion(),

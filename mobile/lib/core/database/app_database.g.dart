@@ -5459,6 +5459,1313 @@ class VentaDetallesCompanion extends UpdateCompanion<VentaDetalle> {
   }
 }
 
+class $VentaPagosTable extends VentaPagos
+    with TableInfo<$VentaPagosTable, VentaPago> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $VentaPagosTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _uuidMeta = const VerificationMeta('uuid');
+  @override
+  late final GeneratedColumn<String> uuid = GeneratedColumn<String>(
+    'uuid',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _ventaUuidMeta = const VerificationMeta(
+    'ventaUuid',
+  );
+  @override
+  late final GeneratedColumn<String> ventaUuid = GeneratedColumn<String>(
+    'venta_uuid',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _metodoPagoUuidMeta = const VerificationMeta(
+    'metodoPagoUuid',
+  );
+  @override
+  late final GeneratedColumn<String> metodoPagoUuid = GeneratedColumn<String>(
+    'metodo_pago_uuid',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _metodoNombreMeta = const VerificationMeta(
+    'metodoNombre',
+  );
+  @override
+  late final GeneratedColumn<String> metodoNombre = GeneratedColumn<String>(
+    'metodo_nombre',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _metodoTipoMeta = const VerificationMeta(
+    'metodoTipo',
+  );
+  @override
+  late final GeneratedColumn<String> metodoTipo = GeneratedColumn<String>(
+    'metodo_tipo',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('OTRO'),
+  );
+  static const VerificationMeta _montoMeta = const VerificationMeta('monto');
+  @override
+  late final GeneratedColumn<int> monto = GeneratedColumn<int>(
+    'monto',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _montoRecibidoMeta = const VerificationMeta(
+    'montoRecibido',
+  );
+  @override
+  late final GeneratedColumn<int> montoRecibido = GeneratedColumn<int>(
+    'monto_recibido',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _cambioMeta = const VerificationMeta('cambio');
+  @override
+  late final GeneratedColumn<int> cambio = GeneratedColumn<int>(
+    'cambio',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _referenciaMeta = const VerificationMeta(
+    'referencia',
+  );
+  @override
+  late final GeneratedColumn<String> referencia = GeneratedColumn<String>(
+    'referencia',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    uuid,
+    ventaUuid,
+    metodoPagoUuid,
+    metodoNombre,
+    metodoTipo,
+    monto,
+    montoRecibido,
+    cambio,
+    referencia,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'venta_pagos';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<VentaPago> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('uuid')) {
+      context.handle(
+        _uuidMeta,
+        uuid.isAcceptableOrUnknown(data['uuid']!, _uuidMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_uuidMeta);
+    }
+    if (data.containsKey('venta_uuid')) {
+      context.handle(
+        _ventaUuidMeta,
+        ventaUuid.isAcceptableOrUnknown(data['venta_uuid']!, _ventaUuidMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_ventaUuidMeta);
+    }
+    if (data.containsKey('metodo_pago_uuid')) {
+      context.handle(
+        _metodoPagoUuidMeta,
+        metodoPagoUuid.isAcceptableOrUnknown(
+          data['metodo_pago_uuid']!,
+          _metodoPagoUuidMeta,
+        ),
+      );
+    }
+    if (data.containsKey('metodo_nombre')) {
+      context.handle(
+        _metodoNombreMeta,
+        metodoNombre.isAcceptableOrUnknown(
+          data['metodo_nombre']!,
+          _metodoNombreMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_metodoNombreMeta);
+    }
+    if (data.containsKey('metodo_tipo')) {
+      context.handle(
+        _metodoTipoMeta,
+        metodoTipo.isAcceptableOrUnknown(data['metodo_tipo']!, _metodoTipoMeta),
+      );
+    }
+    if (data.containsKey('monto')) {
+      context.handle(
+        _montoMeta,
+        monto.isAcceptableOrUnknown(data['monto']!, _montoMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_montoMeta);
+    }
+    if (data.containsKey('monto_recibido')) {
+      context.handle(
+        _montoRecibidoMeta,
+        montoRecibido.isAcceptableOrUnknown(
+          data['monto_recibido']!,
+          _montoRecibidoMeta,
+        ),
+      );
+    }
+    if (data.containsKey('cambio')) {
+      context.handle(
+        _cambioMeta,
+        cambio.isAcceptableOrUnknown(data['cambio']!, _cambioMeta),
+      );
+    }
+    if (data.containsKey('referencia')) {
+      context.handle(
+        _referenciaMeta,
+        referencia.isAcceptableOrUnknown(data['referencia']!, _referenciaMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {uuid};
+  @override
+  VentaPago map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return VentaPago(
+      uuid: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}uuid'],
+      )!,
+      ventaUuid: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}venta_uuid'],
+      )!,
+      metodoPagoUuid: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}metodo_pago_uuid'],
+      ),
+      metodoNombre: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}metodo_nombre'],
+      )!,
+      metodoTipo: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}metodo_tipo'],
+      )!,
+      monto: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}monto'],
+      )!,
+      montoRecibido: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}monto_recibido'],
+      ),
+      cambio: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}cambio'],
+      ),
+      referencia: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}referencia'],
+      ),
+    );
+  }
+
+  @override
+  $VentaPagosTable createAlias(String alias) {
+    return $VentaPagosTable(attachedDatabase, alias);
+  }
+}
+
+class VentaPago extends DataClass implements Insertable<VentaPago> {
+  final String uuid;
+  final String ventaUuid;
+  final String? metodoPagoUuid;
+
+  /// Instantánea del nombre, igual que `venta_detalles.descripcion`. Si mañana
+  /// se renombra «Nequi» o se da de baja, el ticket histórico NO debe cambiar.
+  final String metodoNombre;
+  final String metodoTipo;
+  final int monto;
+
+  /// Sólo en efectivo. Van por pago y no por venta porque en un cobro mixto
+  /// únicamente una parte se paga en efectivo.
+  final int? montoRecibido;
+  final int? cambio;
+  final String? referencia;
+  const VentaPago({
+    required this.uuid,
+    required this.ventaUuid,
+    this.metodoPagoUuid,
+    required this.metodoNombre,
+    required this.metodoTipo,
+    required this.monto,
+    this.montoRecibido,
+    this.cambio,
+    this.referencia,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['uuid'] = Variable<String>(uuid);
+    map['venta_uuid'] = Variable<String>(ventaUuid);
+    if (!nullToAbsent || metodoPagoUuid != null) {
+      map['metodo_pago_uuid'] = Variable<String>(metodoPagoUuid);
+    }
+    map['metodo_nombre'] = Variable<String>(metodoNombre);
+    map['metodo_tipo'] = Variable<String>(metodoTipo);
+    map['monto'] = Variable<int>(monto);
+    if (!nullToAbsent || montoRecibido != null) {
+      map['monto_recibido'] = Variable<int>(montoRecibido);
+    }
+    if (!nullToAbsent || cambio != null) {
+      map['cambio'] = Variable<int>(cambio);
+    }
+    if (!nullToAbsent || referencia != null) {
+      map['referencia'] = Variable<String>(referencia);
+    }
+    return map;
+  }
+
+  VentaPagosCompanion toCompanion(bool nullToAbsent) {
+    return VentaPagosCompanion(
+      uuid: Value(uuid),
+      ventaUuid: Value(ventaUuid),
+      metodoPagoUuid: metodoPagoUuid == null && nullToAbsent
+          ? const Value.absent()
+          : Value(metodoPagoUuid),
+      metodoNombre: Value(metodoNombre),
+      metodoTipo: Value(metodoTipo),
+      monto: Value(monto),
+      montoRecibido: montoRecibido == null && nullToAbsent
+          ? const Value.absent()
+          : Value(montoRecibido),
+      cambio: cambio == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cambio),
+      referencia: referencia == null && nullToAbsent
+          ? const Value.absent()
+          : Value(referencia),
+    );
+  }
+
+  factory VentaPago.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return VentaPago(
+      uuid: serializer.fromJson<String>(json['uuid']),
+      ventaUuid: serializer.fromJson<String>(json['ventaUuid']),
+      metodoPagoUuid: serializer.fromJson<String?>(json['metodoPagoUuid']),
+      metodoNombre: serializer.fromJson<String>(json['metodoNombre']),
+      metodoTipo: serializer.fromJson<String>(json['metodoTipo']),
+      monto: serializer.fromJson<int>(json['monto']),
+      montoRecibido: serializer.fromJson<int?>(json['montoRecibido']),
+      cambio: serializer.fromJson<int?>(json['cambio']),
+      referencia: serializer.fromJson<String?>(json['referencia']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'uuid': serializer.toJson<String>(uuid),
+      'ventaUuid': serializer.toJson<String>(ventaUuid),
+      'metodoPagoUuid': serializer.toJson<String?>(metodoPagoUuid),
+      'metodoNombre': serializer.toJson<String>(metodoNombre),
+      'metodoTipo': serializer.toJson<String>(metodoTipo),
+      'monto': serializer.toJson<int>(monto),
+      'montoRecibido': serializer.toJson<int?>(montoRecibido),
+      'cambio': serializer.toJson<int?>(cambio),
+      'referencia': serializer.toJson<String?>(referencia),
+    };
+  }
+
+  VentaPago copyWith({
+    String? uuid,
+    String? ventaUuid,
+    Value<String?> metodoPagoUuid = const Value.absent(),
+    String? metodoNombre,
+    String? metodoTipo,
+    int? monto,
+    Value<int?> montoRecibido = const Value.absent(),
+    Value<int?> cambio = const Value.absent(),
+    Value<String?> referencia = const Value.absent(),
+  }) => VentaPago(
+    uuid: uuid ?? this.uuid,
+    ventaUuid: ventaUuid ?? this.ventaUuid,
+    metodoPagoUuid: metodoPagoUuid.present
+        ? metodoPagoUuid.value
+        : this.metodoPagoUuid,
+    metodoNombre: metodoNombre ?? this.metodoNombre,
+    metodoTipo: metodoTipo ?? this.metodoTipo,
+    monto: monto ?? this.monto,
+    montoRecibido: montoRecibido.present
+        ? montoRecibido.value
+        : this.montoRecibido,
+    cambio: cambio.present ? cambio.value : this.cambio,
+    referencia: referencia.present ? referencia.value : this.referencia,
+  );
+  VentaPago copyWithCompanion(VentaPagosCompanion data) {
+    return VentaPago(
+      uuid: data.uuid.present ? data.uuid.value : this.uuid,
+      ventaUuid: data.ventaUuid.present ? data.ventaUuid.value : this.ventaUuid,
+      metodoPagoUuid: data.metodoPagoUuid.present
+          ? data.metodoPagoUuid.value
+          : this.metodoPagoUuid,
+      metodoNombre: data.metodoNombre.present
+          ? data.metodoNombre.value
+          : this.metodoNombre,
+      metodoTipo: data.metodoTipo.present
+          ? data.metodoTipo.value
+          : this.metodoTipo,
+      monto: data.monto.present ? data.monto.value : this.monto,
+      montoRecibido: data.montoRecibido.present
+          ? data.montoRecibido.value
+          : this.montoRecibido,
+      cambio: data.cambio.present ? data.cambio.value : this.cambio,
+      referencia: data.referencia.present
+          ? data.referencia.value
+          : this.referencia,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('VentaPago(')
+          ..write('uuid: $uuid, ')
+          ..write('ventaUuid: $ventaUuid, ')
+          ..write('metodoPagoUuid: $metodoPagoUuid, ')
+          ..write('metodoNombre: $metodoNombre, ')
+          ..write('metodoTipo: $metodoTipo, ')
+          ..write('monto: $monto, ')
+          ..write('montoRecibido: $montoRecibido, ')
+          ..write('cambio: $cambio, ')
+          ..write('referencia: $referencia')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    uuid,
+    ventaUuid,
+    metodoPagoUuid,
+    metodoNombre,
+    metodoTipo,
+    monto,
+    montoRecibido,
+    cambio,
+    referencia,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is VentaPago &&
+          other.uuid == this.uuid &&
+          other.ventaUuid == this.ventaUuid &&
+          other.metodoPagoUuid == this.metodoPagoUuid &&
+          other.metodoNombre == this.metodoNombre &&
+          other.metodoTipo == this.metodoTipo &&
+          other.monto == this.monto &&
+          other.montoRecibido == this.montoRecibido &&
+          other.cambio == this.cambio &&
+          other.referencia == this.referencia);
+}
+
+class VentaPagosCompanion extends UpdateCompanion<VentaPago> {
+  final Value<String> uuid;
+  final Value<String> ventaUuid;
+  final Value<String?> metodoPagoUuid;
+  final Value<String> metodoNombre;
+  final Value<String> metodoTipo;
+  final Value<int> monto;
+  final Value<int?> montoRecibido;
+  final Value<int?> cambio;
+  final Value<String?> referencia;
+  final Value<int> rowid;
+  const VentaPagosCompanion({
+    this.uuid = const Value.absent(),
+    this.ventaUuid = const Value.absent(),
+    this.metodoPagoUuid = const Value.absent(),
+    this.metodoNombre = const Value.absent(),
+    this.metodoTipo = const Value.absent(),
+    this.monto = const Value.absent(),
+    this.montoRecibido = const Value.absent(),
+    this.cambio = const Value.absent(),
+    this.referencia = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  VentaPagosCompanion.insert({
+    required String uuid,
+    required String ventaUuid,
+    this.metodoPagoUuid = const Value.absent(),
+    required String metodoNombre,
+    this.metodoTipo = const Value.absent(),
+    required int monto,
+    this.montoRecibido = const Value.absent(),
+    this.cambio = const Value.absent(),
+    this.referencia = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : uuid = Value(uuid),
+       ventaUuid = Value(ventaUuid),
+       metodoNombre = Value(metodoNombre),
+       monto = Value(monto);
+  static Insertable<VentaPago> custom({
+    Expression<String>? uuid,
+    Expression<String>? ventaUuid,
+    Expression<String>? metodoPagoUuid,
+    Expression<String>? metodoNombre,
+    Expression<String>? metodoTipo,
+    Expression<int>? monto,
+    Expression<int>? montoRecibido,
+    Expression<int>? cambio,
+    Expression<String>? referencia,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (uuid != null) 'uuid': uuid,
+      if (ventaUuid != null) 'venta_uuid': ventaUuid,
+      if (metodoPagoUuid != null) 'metodo_pago_uuid': metodoPagoUuid,
+      if (metodoNombre != null) 'metodo_nombre': metodoNombre,
+      if (metodoTipo != null) 'metodo_tipo': metodoTipo,
+      if (monto != null) 'monto': monto,
+      if (montoRecibido != null) 'monto_recibido': montoRecibido,
+      if (cambio != null) 'cambio': cambio,
+      if (referencia != null) 'referencia': referencia,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  VentaPagosCompanion copyWith({
+    Value<String>? uuid,
+    Value<String>? ventaUuid,
+    Value<String?>? metodoPagoUuid,
+    Value<String>? metodoNombre,
+    Value<String>? metodoTipo,
+    Value<int>? monto,
+    Value<int?>? montoRecibido,
+    Value<int?>? cambio,
+    Value<String?>? referencia,
+    Value<int>? rowid,
+  }) {
+    return VentaPagosCompanion(
+      uuid: uuid ?? this.uuid,
+      ventaUuid: ventaUuid ?? this.ventaUuid,
+      metodoPagoUuid: metodoPagoUuid ?? this.metodoPagoUuid,
+      metodoNombre: metodoNombre ?? this.metodoNombre,
+      metodoTipo: metodoTipo ?? this.metodoTipo,
+      monto: monto ?? this.monto,
+      montoRecibido: montoRecibido ?? this.montoRecibido,
+      cambio: cambio ?? this.cambio,
+      referencia: referencia ?? this.referencia,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (uuid.present) {
+      map['uuid'] = Variable<String>(uuid.value);
+    }
+    if (ventaUuid.present) {
+      map['venta_uuid'] = Variable<String>(ventaUuid.value);
+    }
+    if (metodoPagoUuid.present) {
+      map['metodo_pago_uuid'] = Variable<String>(metodoPagoUuid.value);
+    }
+    if (metodoNombre.present) {
+      map['metodo_nombre'] = Variable<String>(metodoNombre.value);
+    }
+    if (metodoTipo.present) {
+      map['metodo_tipo'] = Variable<String>(metodoTipo.value);
+    }
+    if (monto.present) {
+      map['monto'] = Variable<int>(monto.value);
+    }
+    if (montoRecibido.present) {
+      map['monto_recibido'] = Variable<int>(montoRecibido.value);
+    }
+    if (cambio.present) {
+      map['cambio'] = Variable<int>(cambio.value);
+    }
+    if (referencia.present) {
+      map['referencia'] = Variable<String>(referencia.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('VentaPagosCompanion(')
+          ..write('uuid: $uuid, ')
+          ..write('ventaUuid: $ventaUuid, ')
+          ..write('metodoPagoUuid: $metodoPagoUuid, ')
+          ..write('metodoNombre: $metodoNombre, ')
+          ..write('metodoTipo: $metodoTipo, ')
+          ..write('monto: $monto, ')
+          ..write('montoRecibido: $montoRecibido, ')
+          ..write('cambio: $cambio, ')
+          ..write('referencia: $referencia, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $MetodosPagoTable extends MetodosPago
+    with TableInfo<$MetodosPagoTable, MetodoPago> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $MetodosPagoTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _uuidMeta = const VerificationMeta('uuid');
+  @override
+  late final GeneratedColumn<String> uuid = GeneratedColumn<String>(
+    'uuid',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nombreMeta = const VerificationMeta('nombre');
+  @override
+  late final GeneratedColumn<String> nombre = GeneratedColumn<String>(
+    'nombre',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _tipoMeta = const VerificationMeta('tipo');
+  @override
+  late final GeneratedColumn<String> tipo = GeneratedColumn<String>(
+    'tipo',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('OTRO'),
+  );
+  static const VerificationMeta _requiereReferenciaMeta =
+      const VerificationMeta('requiereReferencia');
+  @override
+  late final GeneratedColumn<bool> requiereReferencia = GeneratedColumn<bool>(
+    'requiere_referencia',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("requiere_referencia" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _qrUrlMeta = const VerificationMeta('qrUrl');
+  @override
+  late final GeneratedColumn<String> qrUrl = GeneratedColumn<String>(
+    'qr_url',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _qrLocalMeta = const VerificationMeta(
+    'qrLocal',
+  );
+  @override
+  late final GeneratedColumn<String> qrLocal = GeneratedColumn<String>(
+    'qr_local',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _instruccionesMeta = const VerificationMeta(
+    'instrucciones',
+  );
+  @override
+  late final GeneratedColumn<String> instrucciones = GeneratedColumn<String>(
+    'instrucciones',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _colorMeta = const VerificationMeta('color');
+  @override
+  late final GeneratedColumn<String> color = GeneratedColumn<String>(
+    'color',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('#0E6B5C'),
+  );
+  static const VerificationMeta _ordenMeta = const VerificationMeta('orden');
+  @override
+  late final GeneratedColumn<int> orden = GeneratedColumn<int>(
+    'orden',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _activoMeta = const VerificationMeta('activo');
+  @override
+  late final GeneratedColumn<bool> activo = GeneratedColumn<bool>(
+    'activo',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("activo" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    uuid,
+    nombre,
+    tipo,
+    requiereReferencia,
+    qrUrl,
+    qrLocal,
+    instrucciones,
+    color,
+    orden,
+    activo,
+    updatedAt,
+    deletedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'metodos_pago';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<MetodoPago> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('uuid')) {
+      context.handle(
+        _uuidMeta,
+        uuid.isAcceptableOrUnknown(data['uuid']!, _uuidMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_uuidMeta);
+    }
+    if (data.containsKey('nombre')) {
+      context.handle(
+        _nombreMeta,
+        nombre.isAcceptableOrUnknown(data['nombre']!, _nombreMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_nombreMeta);
+    }
+    if (data.containsKey('tipo')) {
+      context.handle(
+        _tipoMeta,
+        tipo.isAcceptableOrUnknown(data['tipo']!, _tipoMeta),
+      );
+    }
+    if (data.containsKey('requiere_referencia')) {
+      context.handle(
+        _requiereReferenciaMeta,
+        requiereReferencia.isAcceptableOrUnknown(
+          data['requiere_referencia']!,
+          _requiereReferenciaMeta,
+        ),
+      );
+    }
+    if (data.containsKey('qr_url')) {
+      context.handle(
+        _qrUrlMeta,
+        qrUrl.isAcceptableOrUnknown(data['qr_url']!, _qrUrlMeta),
+      );
+    }
+    if (data.containsKey('qr_local')) {
+      context.handle(
+        _qrLocalMeta,
+        qrLocal.isAcceptableOrUnknown(data['qr_local']!, _qrLocalMeta),
+      );
+    }
+    if (data.containsKey('instrucciones')) {
+      context.handle(
+        _instruccionesMeta,
+        instrucciones.isAcceptableOrUnknown(
+          data['instrucciones']!,
+          _instruccionesMeta,
+        ),
+      );
+    }
+    if (data.containsKey('color')) {
+      context.handle(
+        _colorMeta,
+        color.isAcceptableOrUnknown(data['color']!, _colorMeta),
+      );
+    }
+    if (data.containsKey('orden')) {
+      context.handle(
+        _ordenMeta,
+        orden.isAcceptableOrUnknown(data['orden']!, _ordenMeta),
+      );
+    }
+    if (data.containsKey('activo')) {
+      context.handle(
+        _activoMeta,
+        activo.isAcceptableOrUnknown(data['activo']!, _activoMeta),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {uuid};
+  @override
+  MetodoPago map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return MetodoPago(
+      uuid: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}uuid'],
+      )!,
+      nombre: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}nombre'],
+      )!,
+      tipo: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tipo'],
+      )!,
+      requiereReferencia: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}requiere_referencia'],
+      )!,
+      qrUrl: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}qr_url'],
+      ),
+      qrLocal: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}qr_local'],
+      ),
+      instrucciones: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}instrucciones'],
+      ),
+      color: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}color'],
+      )!,
+      orden: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}orden'],
+      )!,
+      activo: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}activo'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      ),
+    );
+  }
+
+  @override
+  $MetodosPagoTable createAlias(String alias) {
+    return $MetodosPagoTable(attachedDatabase, alias);
+  }
+}
+
+class MetodoPago extends DataClass implements Insertable<MetodoPago> {
+  final String uuid;
+  final String nombre;
+
+  /// EFECTIVO · TARJETA · TRANSFERENCIA · CREDITO · OTRO
+  ///
+  /// El nombre es libre («Nequi», «Llave Bre-B»); el tipo es lo acotado, porque
+  /// gobierna el comportamiento del cobro: sólo EFECTIVO calcula vueltas, sólo
+  /// CREDITO deja saldo pendiente.
+  final String tipo;
+  final bool requiereReferencia;
+
+  /// URL del QR que el vendedor le muestra al cliente. Es del servidor y no una
+  /// ruta local a propósito: lo configura el administrador desde su teléfono y
+  /// tiene que verse en el del vendedor.
+  final String? qrUrl;
+
+  /// Copia del QR ya descargada. Sin ella, mostrarlo exigiría red justo en el
+  /// momento de cobrar, que es cuando menos se puede depender de ella.
+  final String? qrLocal;
+  final String? instrucciones;
+  final String color;
+  final int orden;
+  final bool activo;
+  final DateTime updatedAt;
+  final DateTime? deletedAt;
+  const MetodoPago({
+    required this.uuid,
+    required this.nombre,
+    required this.tipo,
+    required this.requiereReferencia,
+    this.qrUrl,
+    this.qrLocal,
+    this.instrucciones,
+    required this.color,
+    required this.orden,
+    required this.activo,
+    required this.updatedAt,
+    this.deletedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['uuid'] = Variable<String>(uuid);
+    map['nombre'] = Variable<String>(nombre);
+    map['tipo'] = Variable<String>(tipo);
+    map['requiere_referencia'] = Variable<bool>(requiereReferencia);
+    if (!nullToAbsent || qrUrl != null) {
+      map['qr_url'] = Variable<String>(qrUrl);
+    }
+    if (!nullToAbsent || qrLocal != null) {
+      map['qr_local'] = Variable<String>(qrLocal);
+    }
+    if (!nullToAbsent || instrucciones != null) {
+      map['instrucciones'] = Variable<String>(instrucciones);
+    }
+    map['color'] = Variable<String>(color);
+    map['orden'] = Variable<int>(orden);
+    map['activo'] = Variable<bool>(activo);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
+    return map;
+  }
+
+  MetodosPagoCompanion toCompanion(bool nullToAbsent) {
+    return MetodosPagoCompanion(
+      uuid: Value(uuid),
+      nombre: Value(nombre),
+      tipo: Value(tipo),
+      requiereReferencia: Value(requiereReferencia),
+      qrUrl: qrUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(qrUrl),
+      qrLocal: qrLocal == null && nullToAbsent
+          ? const Value.absent()
+          : Value(qrLocal),
+      instrucciones: instrucciones == null && nullToAbsent
+          ? const Value.absent()
+          : Value(instrucciones),
+      color: Value(color),
+      orden: Value(orden),
+      activo: Value(activo),
+      updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+    );
+  }
+
+  factory MetodoPago.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return MetodoPago(
+      uuid: serializer.fromJson<String>(json['uuid']),
+      nombre: serializer.fromJson<String>(json['nombre']),
+      tipo: serializer.fromJson<String>(json['tipo']),
+      requiereReferencia: serializer.fromJson<bool>(json['requiereReferencia']),
+      qrUrl: serializer.fromJson<String?>(json['qrUrl']),
+      qrLocal: serializer.fromJson<String?>(json['qrLocal']),
+      instrucciones: serializer.fromJson<String?>(json['instrucciones']),
+      color: serializer.fromJson<String>(json['color']),
+      orden: serializer.fromJson<int>(json['orden']),
+      activo: serializer.fromJson<bool>(json['activo']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'uuid': serializer.toJson<String>(uuid),
+      'nombre': serializer.toJson<String>(nombre),
+      'tipo': serializer.toJson<String>(tipo),
+      'requiereReferencia': serializer.toJson<bool>(requiereReferencia),
+      'qrUrl': serializer.toJson<String?>(qrUrl),
+      'qrLocal': serializer.toJson<String?>(qrLocal),
+      'instrucciones': serializer.toJson<String?>(instrucciones),
+      'color': serializer.toJson<String>(color),
+      'orden': serializer.toJson<int>(orden),
+      'activo': serializer.toJson<bool>(activo),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
+    };
+  }
+
+  MetodoPago copyWith({
+    String? uuid,
+    String? nombre,
+    String? tipo,
+    bool? requiereReferencia,
+    Value<String?> qrUrl = const Value.absent(),
+    Value<String?> qrLocal = const Value.absent(),
+    Value<String?> instrucciones = const Value.absent(),
+    String? color,
+    int? orden,
+    bool? activo,
+    DateTime? updatedAt,
+    Value<DateTime?> deletedAt = const Value.absent(),
+  }) => MetodoPago(
+    uuid: uuid ?? this.uuid,
+    nombre: nombre ?? this.nombre,
+    tipo: tipo ?? this.tipo,
+    requiereReferencia: requiereReferencia ?? this.requiereReferencia,
+    qrUrl: qrUrl.present ? qrUrl.value : this.qrUrl,
+    qrLocal: qrLocal.present ? qrLocal.value : this.qrLocal,
+    instrucciones: instrucciones.present
+        ? instrucciones.value
+        : this.instrucciones,
+    color: color ?? this.color,
+    orden: orden ?? this.orden,
+    activo: activo ?? this.activo,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+  );
+  MetodoPago copyWithCompanion(MetodosPagoCompanion data) {
+    return MetodoPago(
+      uuid: data.uuid.present ? data.uuid.value : this.uuid,
+      nombre: data.nombre.present ? data.nombre.value : this.nombre,
+      tipo: data.tipo.present ? data.tipo.value : this.tipo,
+      requiereReferencia: data.requiereReferencia.present
+          ? data.requiereReferencia.value
+          : this.requiereReferencia,
+      qrUrl: data.qrUrl.present ? data.qrUrl.value : this.qrUrl,
+      qrLocal: data.qrLocal.present ? data.qrLocal.value : this.qrLocal,
+      instrucciones: data.instrucciones.present
+          ? data.instrucciones.value
+          : this.instrucciones,
+      color: data.color.present ? data.color.value : this.color,
+      orden: data.orden.present ? data.orden.value : this.orden,
+      activo: data.activo.present ? data.activo.value : this.activo,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MetodoPago(')
+          ..write('uuid: $uuid, ')
+          ..write('nombre: $nombre, ')
+          ..write('tipo: $tipo, ')
+          ..write('requiereReferencia: $requiereReferencia, ')
+          ..write('qrUrl: $qrUrl, ')
+          ..write('qrLocal: $qrLocal, ')
+          ..write('instrucciones: $instrucciones, ')
+          ..write('color: $color, ')
+          ..write('orden: $orden, ')
+          ..write('activo: $activo, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    uuid,
+    nombre,
+    tipo,
+    requiereReferencia,
+    qrUrl,
+    qrLocal,
+    instrucciones,
+    color,
+    orden,
+    activo,
+    updatedAt,
+    deletedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is MetodoPago &&
+          other.uuid == this.uuid &&
+          other.nombre == this.nombre &&
+          other.tipo == this.tipo &&
+          other.requiereReferencia == this.requiereReferencia &&
+          other.qrUrl == this.qrUrl &&
+          other.qrLocal == this.qrLocal &&
+          other.instrucciones == this.instrucciones &&
+          other.color == this.color &&
+          other.orden == this.orden &&
+          other.activo == this.activo &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
+}
+
+class MetodosPagoCompanion extends UpdateCompanion<MetodoPago> {
+  final Value<String> uuid;
+  final Value<String> nombre;
+  final Value<String> tipo;
+  final Value<bool> requiereReferencia;
+  final Value<String?> qrUrl;
+  final Value<String?> qrLocal;
+  final Value<String?> instrucciones;
+  final Value<String> color;
+  final Value<int> orden;
+  final Value<bool> activo;
+  final Value<DateTime> updatedAt;
+  final Value<DateTime?> deletedAt;
+  final Value<int> rowid;
+  const MetodosPagoCompanion({
+    this.uuid = const Value.absent(),
+    this.nombre = const Value.absent(),
+    this.tipo = const Value.absent(),
+    this.requiereReferencia = const Value.absent(),
+    this.qrUrl = const Value.absent(),
+    this.qrLocal = const Value.absent(),
+    this.instrucciones = const Value.absent(),
+    this.color = const Value.absent(),
+    this.orden = const Value.absent(),
+    this.activo = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  MetodosPagoCompanion.insert({
+    required String uuid,
+    required String nombre,
+    this.tipo = const Value.absent(),
+    this.requiereReferencia = const Value.absent(),
+    this.qrUrl = const Value.absent(),
+    this.qrLocal = const Value.absent(),
+    this.instrucciones = const Value.absent(),
+    this.color = const Value.absent(),
+    this.orden = const Value.absent(),
+    this.activo = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : uuid = Value(uuid),
+       nombre = Value(nombre);
+  static Insertable<MetodoPago> custom({
+    Expression<String>? uuid,
+    Expression<String>? nombre,
+    Expression<String>? tipo,
+    Expression<bool>? requiereReferencia,
+    Expression<String>? qrUrl,
+    Expression<String>? qrLocal,
+    Expression<String>? instrucciones,
+    Expression<String>? color,
+    Expression<int>? orden,
+    Expression<bool>? activo,
+    Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (uuid != null) 'uuid': uuid,
+      if (nombre != null) 'nombre': nombre,
+      if (tipo != null) 'tipo': tipo,
+      if (requiereReferencia != null) 'requiere_referencia': requiereReferencia,
+      if (qrUrl != null) 'qr_url': qrUrl,
+      if (qrLocal != null) 'qr_local': qrLocal,
+      if (instrucciones != null) 'instrucciones': instrucciones,
+      if (color != null) 'color': color,
+      if (orden != null) 'orden': orden,
+      if (activo != null) 'activo': activo,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  MetodosPagoCompanion copyWith({
+    Value<String>? uuid,
+    Value<String>? nombre,
+    Value<String>? tipo,
+    Value<bool>? requiereReferencia,
+    Value<String?>? qrUrl,
+    Value<String?>? qrLocal,
+    Value<String?>? instrucciones,
+    Value<String>? color,
+    Value<int>? orden,
+    Value<bool>? activo,
+    Value<DateTime>? updatedAt,
+    Value<DateTime?>? deletedAt,
+    Value<int>? rowid,
+  }) {
+    return MetodosPagoCompanion(
+      uuid: uuid ?? this.uuid,
+      nombre: nombre ?? this.nombre,
+      tipo: tipo ?? this.tipo,
+      requiereReferencia: requiereReferencia ?? this.requiereReferencia,
+      qrUrl: qrUrl ?? this.qrUrl,
+      qrLocal: qrLocal ?? this.qrLocal,
+      instrucciones: instrucciones ?? this.instrucciones,
+      color: color ?? this.color,
+      orden: orden ?? this.orden,
+      activo: activo ?? this.activo,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (uuid.present) {
+      map['uuid'] = Variable<String>(uuid.value);
+    }
+    if (nombre.present) {
+      map['nombre'] = Variable<String>(nombre.value);
+    }
+    if (tipo.present) {
+      map['tipo'] = Variable<String>(tipo.value);
+    }
+    if (requiereReferencia.present) {
+      map['requiere_referencia'] = Variable<bool>(requiereReferencia.value);
+    }
+    if (qrUrl.present) {
+      map['qr_url'] = Variable<String>(qrUrl.value);
+    }
+    if (qrLocal.present) {
+      map['qr_local'] = Variable<String>(qrLocal.value);
+    }
+    if (instrucciones.present) {
+      map['instrucciones'] = Variable<String>(instrucciones.value);
+    }
+    if (color.present) {
+      map['color'] = Variable<String>(color.value);
+    }
+    if (orden.present) {
+      map['orden'] = Variable<int>(orden.value);
+    }
+    if (activo.present) {
+      map['activo'] = Variable<bool>(activo.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MetodosPagoCompanion(')
+          ..write('uuid: $uuid, ')
+          ..write('nombre: $nombre, ')
+          ..write('tipo: $tipo, ')
+          ..write('requiereReferencia: $requiereReferencia, ')
+          ..write('qrUrl: $qrUrl, ')
+          ..write('qrLocal: $qrLocal, ')
+          ..write('instrucciones: $instrucciones, ')
+          ..write('color: $color, ')
+          ..write('orden: $orden, ')
+          ..write('activo: $activo, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $MovimientosTable extends Movimientos
     with TableInfo<$MovimientosTable, Movimiento> {
   @override
@@ -8898,6 +10205,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   );
   late final $VentasTable ventas = $VentasTable(this);
   late final $VentaDetallesTable ventaDetalles = $VentaDetallesTable(this);
+  late final $VentaPagosTable ventaPagos = $VentaPagosTable(this);
+  late final $MetodosPagoTable metodosPago = $MetodosPagoTable(this);
   late final $MovimientosTable movimientos = $MovimientosTable(this);
   late final $AlertasTable alertas = $AlertasTable(this);
   late final $SyncOutboxTable syncOutbox = $SyncOutboxTable(this);
@@ -8932,6 +10241,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     'idx_detalles_venta',
     'CREATE INDEX idx_detalles_venta ON venta_detalles (venta_uuid)',
   );
+  late final Index idxPagosVenta = Index(
+    'idx_pagos_venta',
+    'CREATE INDEX idx_pagos_venta ON venta_pagos (venta_uuid)',
+  );
   late final Index idxMovProducto = Index(
     'idx_mov_producto',
     'CREATE INDEX idx_mov_producto ON movimientos (producto_uuid)',
@@ -8956,6 +10269,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     productoCodigos,
     ventas,
     ventaDetalles,
+    ventaPagos,
+    metodosPago,
     movimientos,
     alertas,
     syncOutbox,
@@ -8969,6 +10284,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     idxVentasFecha,
     idxVentasPendiente,
     idxDetallesVenta,
+    idxPagosVenta,
     idxMovProducto,
     idxMovFecha,
     idxOutboxPendientes,
@@ -11508,6 +12824,626 @@ typedef $$VentaDetallesTableProcessedTableManager =
       VentaDetalle,
       PrefetchHooks Function()
     >;
+typedef $$VentaPagosTableCreateCompanionBuilder =
+    VentaPagosCompanion Function({
+      required String uuid,
+      required String ventaUuid,
+      Value<String?> metodoPagoUuid,
+      required String metodoNombre,
+      Value<String> metodoTipo,
+      required int monto,
+      Value<int?> montoRecibido,
+      Value<int?> cambio,
+      Value<String?> referencia,
+      Value<int> rowid,
+    });
+typedef $$VentaPagosTableUpdateCompanionBuilder =
+    VentaPagosCompanion Function({
+      Value<String> uuid,
+      Value<String> ventaUuid,
+      Value<String?> metodoPagoUuid,
+      Value<String> metodoNombre,
+      Value<String> metodoTipo,
+      Value<int> monto,
+      Value<int?> montoRecibido,
+      Value<int?> cambio,
+      Value<String?> referencia,
+      Value<int> rowid,
+    });
+
+class $$VentaPagosTableFilterComposer
+    extends Composer<_$AppDatabase, $VentaPagosTable> {
+  $$VentaPagosTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get uuid => $composableBuilder(
+    column: $table.uuid,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ventaUuid => $composableBuilder(
+    column: $table.ventaUuid,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get metodoPagoUuid => $composableBuilder(
+    column: $table.metodoPagoUuid,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get metodoNombre => $composableBuilder(
+    column: $table.metodoNombre,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get metodoTipo => $composableBuilder(
+    column: $table.metodoTipo,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get monto => $composableBuilder(
+    column: $table.monto,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get montoRecibido => $composableBuilder(
+    column: $table.montoRecibido,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get cambio => $composableBuilder(
+    column: $table.cambio,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get referencia => $composableBuilder(
+    column: $table.referencia,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$VentaPagosTableOrderingComposer
+    extends Composer<_$AppDatabase, $VentaPagosTable> {
+  $$VentaPagosTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get uuid => $composableBuilder(
+    column: $table.uuid,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ventaUuid => $composableBuilder(
+    column: $table.ventaUuid,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get metodoPagoUuid => $composableBuilder(
+    column: $table.metodoPagoUuid,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get metodoNombre => $composableBuilder(
+    column: $table.metodoNombre,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get metodoTipo => $composableBuilder(
+    column: $table.metodoTipo,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get monto => $composableBuilder(
+    column: $table.monto,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get montoRecibido => $composableBuilder(
+    column: $table.montoRecibido,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get cambio => $composableBuilder(
+    column: $table.cambio,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get referencia => $composableBuilder(
+    column: $table.referencia,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$VentaPagosTableAnnotationComposer
+    extends Composer<_$AppDatabase, $VentaPagosTable> {
+  $$VentaPagosTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get uuid =>
+      $composableBuilder(column: $table.uuid, builder: (column) => column);
+
+  GeneratedColumn<String> get ventaUuid =>
+      $composableBuilder(column: $table.ventaUuid, builder: (column) => column);
+
+  GeneratedColumn<String> get metodoPagoUuid => $composableBuilder(
+    column: $table.metodoPagoUuid,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get metodoNombre => $composableBuilder(
+    column: $table.metodoNombre,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get metodoTipo => $composableBuilder(
+    column: $table.metodoTipo,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get monto =>
+      $composableBuilder(column: $table.monto, builder: (column) => column);
+
+  GeneratedColumn<int> get montoRecibido => $composableBuilder(
+    column: $table.montoRecibido,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get cambio =>
+      $composableBuilder(column: $table.cambio, builder: (column) => column);
+
+  GeneratedColumn<String> get referencia => $composableBuilder(
+    column: $table.referencia,
+    builder: (column) => column,
+  );
+}
+
+class $$VentaPagosTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $VentaPagosTable,
+          VentaPago,
+          $$VentaPagosTableFilterComposer,
+          $$VentaPagosTableOrderingComposer,
+          $$VentaPagosTableAnnotationComposer,
+          $$VentaPagosTableCreateCompanionBuilder,
+          $$VentaPagosTableUpdateCompanionBuilder,
+          (
+            VentaPago,
+            BaseReferences<_$AppDatabase, $VentaPagosTable, VentaPago>,
+          ),
+          VentaPago,
+          PrefetchHooks Function()
+        > {
+  $$VentaPagosTableTableManager(_$AppDatabase db, $VentaPagosTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$VentaPagosTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$VentaPagosTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$VentaPagosTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> uuid = const Value.absent(),
+                Value<String> ventaUuid = const Value.absent(),
+                Value<String?> metodoPagoUuid = const Value.absent(),
+                Value<String> metodoNombre = const Value.absent(),
+                Value<String> metodoTipo = const Value.absent(),
+                Value<int> monto = const Value.absent(),
+                Value<int?> montoRecibido = const Value.absent(),
+                Value<int?> cambio = const Value.absent(),
+                Value<String?> referencia = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => VentaPagosCompanion(
+                uuid: uuid,
+                ventaUuid: ventaUuid,
+                metodoPagoUuid: metodoPagoUuid,
+                metodoNombre: metodoNombre,
+                metodoTipo: metodoTipo,
+                monto: monto,
+                montoRecibido: montoRecibido,
+                cambio: cambio,
+                referencia: referencia,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String uuid,
+                required String ventaUuid,
+                Value<String?> metodoPagoUuid = const Value.absent(),
+                required String metodoNombre,
+                Value<String> metodoTipo = const Value.absent(),
+                required int monto,
+                Value<int?> montoRecibido = const Value.absent(),
+                Value<int?> cambio = const Value.absent(),
+                Value<String?> referencia = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => VentaPagosCompanion.insert(
+                uuid: uuid,
+                ventaUuid: ventaUuid,
+                metodoPagoUuid: metodoPagoUuid,
+                metodoNombre: metodoNombre,
+                metodoTipo: metodoTipo,
+                monto: monto,
+                montoRecibido: montoRecibido,
+                cambio: cambio,
+                referencia: referencia,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$VentaPagosTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $VentaPagosTable,
+      VentaPago,
+      $$VentaPagosTableFilterComposer,
+      $$VentaPagosTableOrderingComposer,
+      $$VentaPagosTableAnnotationComposer,
+      $$VentaPagosTableCreateCompanionBuilder,
+      $$VentaPagosTableUpdateCompanionBuilder,
+      (VentaPago, BaseReferences<_$AppDatabase, $VentaPagosTable, VentaPago>),
+      VentaPago,
+      PrefetchHooks Function()
+    >;
+typedef $$MetodosPagoTableCreateCompanionBuilder =
+    MetodosPagoCompanion Function({
+      required String uuid,
+      required String nombre,
+      Value<String> tipo,
+      Value<bool> requiereReferencia,
+      Value<String?> qrUrl,
+      Value<String?> qrLocal,
+      Value<String?> instrucciones,
+      Value<String> color,
+      Value<int> orden,
+      Value<bool> activo,
+      Value<DateTime> updatedAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+typedef $$MetodosPagoTableUpdateCompanionBuilder =
+    MetodosPagoCompanion Function({
+      Value<String> uuid,
+      Value<String> nombre,
+      Value<String> tipo,
+      Value<bool> requiereReferencia,
+      Value<String?> qrUrl,
+      Value<String?> qrLocal,
+      Value<String?> instrucciones,
+      Value<String> color,
+      Value<int> orden,
+      Value<bool> activo,
+      Value<DateTime> updatedAt,
+      Value<DateTime?> deletedAt,
+      Value<int> rowid,
+    });
+
+class $$MetodosPagoTableFilterComposer
+    extends Composer<_$AppDatabase, $MetodosPagoTable> {
+  $$MetodosPagoTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get uuid => $composableBuilder(
+    column: $table.uuid,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get nombre => $composableBuilder(
+    column: $table.nombre,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get tipo => $composableBuilder(
+    column: $table.tipo,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get requiereReferencia => $composableBuilder(
+    column: $table.requiereReferencia,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get qrUrl => $composableBuilder(
+    column: $table.qrUrl,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get qrLocal => $composableBuilder(
+    column: $table.qrLocal,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get instrucciones => $composableBuilder(
+    column: $table.instrucciones,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get color => $composableBuilder(
+    column: $table.color,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get orden => $composableBuilder(
+    column: $table.orden,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get activo => $composableBuilder(
+    column: $table.activo,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$MetodosPagoTableOrderingComposer
+    extends Composer<_$AppDatabase, $MetodosPagoTable> {
+  $$MetodosPagoTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get uuid => $composableBuilder(
+    column: $table.uuid,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get nombre => $composableBuilder(
+    column: $table.nombre,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get tipo => $composableBuilder(
+    column: $table.tipo,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get requiereReferencia => $composableBuilder(
+    column: $table.requiereReferencia,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get qrUrl => $composableBuilder(
+    column: $table.qrUrl,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get qrLocal => $composableBuilder(
+    column: $table.qrLocal,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get instrucciones => $composableBuilder(
+    column: $table.instrucciones,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get color => $composableBuilder(
+    column: $table.color,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get orden => $composableBuilder(
+    column: $table.orden,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get activo => $composableBuilder(
+    column: $table.activo,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$MetodosPagoTableAnnotationComposer
+    extends Composer<_$AppDatabase, $MetodosPagoTable> {
+  $$MetodosPagoTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get uuid =>
+      $composableBuilder(column: $table.uuid, builder: (column) => column);
+
+  GeneratedColumn<String> get nombre =>
+      $composableBuilder(column: $table.nombre, builder: (column) => column);
+
+  GeneratedColumn<String> get tipo =>
+      $composableBuilder(column: $table.tipo, builder: (column) => column);
+
+  GeneratedColumn<bool> get requiereReferencia => $composableBuilder(
+    column: $table.requiereReferencia,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get qrUrl =>
+      $composableBuilder(column: $table.qrUrl, builder: (column) => column);
+
+  GeneratedColumn<String> get qrLocal =>
+      $composableBuilder(column: $table.qrLocal, builder: (column) => column);
+
+  GeneratedColumn<String> get instrucciones => $composableBuilder(
+    column: $table.instrucciones,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get color =>
+      $composableBuilder(column: $table.color, builder: (column) => column);
+
+  GeneratedColumn<int> get orden =>
+      $composableBuilder(column: $table.orden, builder: (column) => column);
+
+  GeneratedColumn<bool> get activo =>
+      $composableBuilder(column: $table.activo, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+}
+
+class $$MetodosPagoTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $MetodosPagoTable,
+          MetodoPago,
+          $$MetodosPagoTableFilterComposer,
+          $$MetodosPagoTableOrderingComposer,
+          $$MetodosPagoTableAnnotationComposer,
+          $$MetodosPagoTableCreateCompanionBuilder,
+          $$MetodosPagoTableUpdateCompanionBuilder,
+          (
+            MetodoPago,
+            BaseReferences<_$AppDatabase, $MetodosPagoTable, MetodoPago>,
+          ),
+          MetodoPago,
+          PrefetchHooks Function()
+        > {
+  $$MetodosPagoTableTableManager(_$AppDatabase db, $MetodosPagoTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$MetodosPagoTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$MetodosPagoTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$MetodosPagoTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> uuid = const Value.absent(),
+                Value<String> nombre = const Value.absent(),
+                Value<String> tipo = const Value.absent(),
+                Value<bool> requiereReferencia = const Value.absent(),
+                Value<String?> qrUrl = const Value.absent(),
+                Value<String?> qrLocal = const Value.absent(),
+                Value<String?> instrucciones = const Value.absent(),
+                Value<String> color = const Value.absent(),
+                Value<int> orden = const Value.absent(),
+                Value<bool> activo = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => MetodosPagoCompanion(
+                uuid: uuid,
+                nombre: nombre,
+                tipo: tipo,
+                requiereReferencia: requiereReferencia,
+                qrUrl: qrUrl,
+                qrLocal: qrLocal,
+                instrucciones: instrucciones,
+                color: color,
+                orden: orden,
+                activo: activo,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String uuid,
+                required String nombre,
+                Value<String> tipo = const Value.absent(),
+                Value<bool> requiereReferencia = const Value.absent(),
+                Value<String?> qrUrl = const Value.absent(),
+                Value<String?> qrLocal = const Value.absent(),
+                Value<String?> instrucciones = const Value.absent(),
+                Value<String> color = const Value.absent(),
+                Value<int> orden = const Value.absent(),
+                Value<bool> activo = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => MetodosPagoCompanion.insert(
+                uuid: uuid,
+                nombre: nombre,
+                tipo: tipo,
+                requiereReferencia: requiereReferencia,
+                qrUrl: qrUrl,
+                qrLocal: qrLocal,
+                instrucciones: instrucciones,
+                color: color,
+                orden: orden,
+                activo: activo,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$MetodosPagoTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $MetodosPagoTable,
+      MetodoPago,
+      $$MetodosPagoTableFilterComposer,
+      $$MetodosPagoTableOrderingComposer,
+      $$MetodosPagoTableAnnotationComposer,
+      $$MetodosPagoTableCreateCompanionBuilder,
+      $$MetodosPagoTableUpdateCompanionBuilder,
+      (
+        MetodoPago,
+        BaseReferences<_$AppDatabase, $MetodosPagoTable, MetodoPago>,
+      ),
+      MetodoPago,
+      PrefetchHooks Function()
+    >;
 typedef $$MovimientosTableCreateCompanionBuilder =
     MovimientosCompanion Function({
       required String uuid,
@@ -13199,6 +15135,10 @@ class $AppDatabaseManager {
       $$VentasTableTableManager(_db, _db.ventas);
   $$VentaDetallesTableTableManager get ventaDetalles =>
       $$VentaDetallesTableTableManager(_db, _db.ventaDetalles);
+  $$VentaPagosTableTableManager get ventaPagos =>
+      $$VentaPagosTableTableManager(_db, _db.ventaPagos);
+  $$MetodosPagoTableTableManager get metodosPago =>
+      $$MetodosPagoTableTableManager(_db, _db.metodosPago);
   $$MovimientosTableTableManager get movimientos =>
       $$MovimientosTableTableManager(_db, _db.movimientos);
   $$AlertasTableTableManager get alertas =>

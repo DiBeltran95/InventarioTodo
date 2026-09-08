@@ -241,7 +241,10 @@ class CarritoNotifier extends Notifier<CarritoEstado> {
   void vaciar() => state = const CarritoEstado();
 
   /// Cobra: escribe la venta en la base local y la encola. **No toca la red.**
-  Future<VentaCompleta> cobrar({Money? montoRecibido}) async {
+  Future<VentaCompleta> cobrar({
+    Money? montoRecibido,
+    List<PagoDeVenta> pagos = const [],
+  }) async {
     if (state.vacio) {
       throw StateError('El carrito está vacío');
     }
@@ -253,6 +256,7 @@ class CarritoNotifier extends Notifier<CarritoEstado> {
       lineas: state.lineas.map((l) => l.aVenta()).toList(),
       metodoPago: state.metodoPago,
       montoRecibido: montoRecibido,
+      pagos: pagos,
       clienteNombre: state.clienteNombre,
       clienteDocumento: state.clienteDocumento,
       notas: state.notas,

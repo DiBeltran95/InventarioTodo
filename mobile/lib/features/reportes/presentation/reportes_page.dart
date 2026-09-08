@@ -70,6 +70,12 @@ class ReportesPage extends ConsumerWidget {
             ),
             const SizedBox(height: 20),
 
+            _Seccion(
+              titulo: 'Ingresos por medio de pago',
+              child: const _IngresosPorMetodo(),
+            ),
+            const SizedBox(height: 20),
+
             if (esAdmin) ...[
               const _Seccion(
                 titulo: 'Inventario por categoría',
@@ -418,6 +424,103 @@ class _TopProductos extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Cuánto entró por cada medio.
+///
+/// Es lo que se mira al cerrar la caja: cuánto efectivo debería haber en el
+/// cajón y cuánto tiene que aparecer en el extracto de cada cuenta.
+class _IngresosPorMetodo extends ConsumerWidget {
+  const _IngresosPorMetodo();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filas = ref.watch(ingresosPorMetodoProvider).value ?? const <IngresoPorMetodo>[];
+
+    if (filas.isEmpty) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: EstadoVacio(
+            icono: Icons.account_balance_wallet_outlined,
+            titulo: 'Sin cobros en el periodo',
+            compacto: true,
+          ),
+        ),
+      );
+    }
+
+    final total = Money.sumar(filas.map((f) => f.total));
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            for (final fila in filas)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          _icono(fila.tipo),
+                          size: 18,
+                          color: context.colores.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(fila.metodo, style: context.textos.bodyMedium),
+                        ),
+                        Text(fila.total.format(), style: context.textos.titleSmall),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    // Barra proporcional: comparar importes en texto obliga a
+                    // leer; en barra se ve de un vistazo cuál pesa más.
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: LinearProgressIndicator(
+                        value: total.esCero ? 0 : fila.total.centavos / total.centavos,
+                        minHeight: 5,
+                        backgroundColor: context.colores.surfaceContainerHighest,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '${fila.numVentas} venta${fila.numVentas == 1 ? '' : 's'}',
+                        style: context.textos.labelSmall?.copyWith(
+                          color: context.colores.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const Divider(height: 20),
+            Row(
+              children: [
+                Text('Total cobrado', style: context.textos.titleSmall),
+                const Spacer(),
+                Text(total.format(), style: context.textos.titleSmall),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static IconData _icono(String tipo) => switch (tipo) {
+        'EFECTIVO' => Icons.payments_outlined,
+        'TARJETA' => Icons.credit_card_rounded,
+        'TRANSFERENCIA' => Icons.smartphone_rounded,
+        'CREDITO' => Icons.schedule_rounded,
+        _ => Icons.account_balance_wallet_outlined,
+      };
 }
 
 class _Valorizacion extends ConsumerWidget {

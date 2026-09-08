@@ -11,6 +11,7 @@ import '../../features/categorias/presentation/categorias_page.dart';
 import '../../features/dashboard/presentation/dashboard_page.dart';
 import '../../features/inventario/presentation/entrada_page.dart';
 import '../../features/inventario/presentation/movimientos_page.dart';
+import '../../features/metodos_pago/presentation/metodos_pago_page.dart';
 import '../../features/productos/presentation/producto_detalle_page.dart';
 import '../../features/productos/presentation/producto_form_page.dart';
 import '../../features/productos/presentation/productos_page.dart';
@@ -46,6 +47,7 @@ class Rutas {
   static const usuarios = '/usuarios';
   static const proveedores = '/proveedores';
   static const categorias = '/categorias';
+  static const metodosPago = '/metodos-pago';
   static const empleados = '/empleados';
   static const productoNuevo = '/productos/nuevo';
 
@@ -78,6 +80,7 @@ const _prefijosSoloAdmin = [
   Rutas.usuarios, // gestión de empleados
   Rutas.proveedores, // a quién se le compra
   Rutas.categorias, // estructura del catálogo
+  Rutas.metodosPago, // con qué cobra el negocio
   Rutas.empleados, // control de cajas
 ];
 
@@ -234,6 +237,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: Rutas.empleados,
         parentNavigatorKey: _navegadorRaiz,
         builder: (context, estado) => const EmpleadosPage(),
+      ),
+      GoRoute(
+        path: Rutas.metodosPago,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const MetodosPagoPage(),
       ),
       GoRoute(
         path: Rutas.categorias,

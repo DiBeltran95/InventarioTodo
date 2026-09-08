@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/app_database.dart';
 import '../database/daos/categorias_dao.dart';
 import '../database/daos/inventario_dao.dart';
+import '../database/daos/metodos_pago_dao.dart';
 import '../database/daos/outbox_dao.dart';
 import '../database/daos/productos_dao.dart';
 import '../database/daos/proveedores_dao.dart';
@@ -61,6 +62,10 @@ final categoriasDaoProvider = Provider<CategoriasDao>(
   (ref) => CategoriasDao(ref.watch(appDatabaseProvider), ref.watch(outboxDaoProvider)),
 );
 
+final metodosPagoDaoProvider = Provider<MetodosPagoDao>(
+  (ref) => MetodosPagoDao(ref.watch(appDatabaseProvider), ref.watch(outboxDaoProvider)),
+);
+
 final proveedoresDaoProvider = Provider<ProveedoresDao>(
   (ref) => ProveedoresDao(ref.watch(appDatabaseProvider), ref.watch(outboxDaoProvider)),
 );
@@ -89,6 +94,7 @@ final syncEngineProvider = Provider<SyncEngine>((ref) {
     sync: ref.watch(syncDaoProvider),
     ventas: ref.watch(ventasDaoProvider),
     productos: ref.watch(productosDaoProvider),
+    metodosPago: ref.watch(metodosPagoDaoProvider),
     conectividad: ref.watch(connectivityServiceProvider),
   );
   ref.onDispose(motor.dispose);
@@ -144,6 +150,29 @@ final nombresUsuariosProvider = StreamProvider<Map<String, String>>((ref) {
   final db = ref.watch(appDatabaseProvider);
   return db.select(db.usuarios).watch().map(
         (filas) => {for (final u in filas) u.uuid: u.nombre},
+      );
+});
+
+/// Medios de pago activos, en el orden configurado.
+///
+/// Sale de SQLite, así que el vendedor puede cobrar **sin conexión** con los
+/// medios que su negocio tenga registrados.
+final metodosPagoActivosProvider = StreamProvider<List<MetodoPago>>(
+  (ref) => ref.watch(metodosPagoDaoProvider).observarActivos(),
+);
+
+final metodosPagoTodosProvider = StreamProvider<List<MetodoPagoConUso>>(
+  (ref) => ref.watch(metodosPagoDaoProvider).observarTodos(),
+);
+
+/// ¿Este negocio fía?
+///
+/// Viene apagado: el fiado obliga a llevar cuentas por cobrar, y una tienda que
+/// no fía no debería ver esa opción al cobrar.
+final permiteCreditoProvider = Provider<bool>((ref) {
+  return ref.watch(configuracionProvider).maybeWhen(
+        data: (c) => c['permite_credito'] == 'true',
+        orElse: () => false,
       );
 });
 

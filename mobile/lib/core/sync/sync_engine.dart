@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../config/app_config.dart';
 import '../database/app_database.dart';
+import '../database/daos/metodos_pago_dao.dart';
 import '../database/daos/outbox_dao.dart';
 import '../database/daos/productos_dao.dart';
 import '../database/daos/sync_dao.dart';
@@ -30,6 +31,7 @@ class SyncEngine extends ChangeNotifier {
     required SyncDao sync,
     required VentasDao ventas,
     required ProductosDao productos,
+    required MetodosPagoDao metodosPago,
     required ConnectivityService conectividad,
   })  : _db = db,
         _api = api,
@@ -37,12 +39,14 @@ class SyncEngine extends ChangeNotifier {
         _sync = sync,
         _ventas = ventas,
         _productos = productos,
+        _metodosPago = metodosPago,
         _conectividad = conectividad;
 
   final AppDatabase _db;
   final ApiClient _api;
   final OutboxDao _outbox;
   final SyncDao _sync;
+  final MetodosPagoDao _metodosPago;
   final VentasDao _ventas;
   final ProductosDao _productos;
   final ConnectivityService _conectividad;
@@ -153,6 +157,7 @@ class SyncEngine extends ChangeNotifier {
       // Las fotos no van en la outbox JSON: se suben por multipart y luego se
       // encola un PRODUCTO_ACTUALIZAR con la URL pública.
       await _subirImagenesPendientes();
+      await _subirQrPendientes();
       final segunda = await _subir();
       enviadas += segunda.enviadas;
       rechazadas += segunda.rechazadas;
@@ -319,6 +324,40 @@ class SyncEngine extends ChangeNotifier {
         await _productos.actualizar(p.uuid, imagenUrl: url, imagenLocal: ruta);
       } catch (e) {
         if (kDebugMode) debugPrint('[sync] foto ${p.uuid}: $e');
+        // Se reintenta en la próxima pasada; no tumba el resto del sync.
+      }
+    }
+  }
+
+  /// Sube los QR de los medios de pago.
+  ///
+  /// Mismo camino que las fotos de producto, y por la misma razón de fondo: el
+  /// QR lo configura el ADMINISTRADOR desde su teléfono y lo muestra el
+  /// VENDEDOR desde el suyo. Mientras viva sólo como ruta local, el vendedor
+  /// no lo ve, que es justo el momento en que hace falta.
+  Future<void> _subirQrPendientes() async {
+    final pendientes = await _metodosPago.conQrSinSubir();
+    if (pendientes.isEmpty) return;
+
+    _fijar(_estado.copyWith(progresoTexto: 'Subiendo códigos QR…'));
+
+    for (final m in pendientes) {
+      final ruta = m.qrLocal;
+      if (ruta == null) continue;
+      final archivo = File(ruta);
+      if (!await archivo.exists()) continue;
+
+      try {
+        final respuesta = await _api.subirImagen(archivo);
+        final datos = respuesta['data'];
+        final url = datos is Map ? datos['url'] as String? : null;
+        if (url == null || url.isEmpty) continue;
+
+        // Se conserva la copia local: sin ella habría que descargar el QR justo
+        // al cobrar, que es cuando menos se puede depender de la red.
+        await _metodosPago.actualizar(m.uuid, qrUrl: url, qrLocal: ruta);
+      } catch (e) {
+        if (kDebugMode) debugPrint('[sync] qr ${m.uuid}: $e');
         // Se reintenta en la próxima pasada; no tumba el resto del sync.
       }
     }

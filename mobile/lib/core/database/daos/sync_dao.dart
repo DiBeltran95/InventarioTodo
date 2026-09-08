@@ -78,10 +78,12 @@ class SyncDao {
       total += await _aplicarUsuarios(entidades['usuarios'], bloqueados);
       total += await _aplicarCategorias(entidades['categorias'], bloqueados);
       total += await _aplicarProveedores(entidades['proveedores'], bloqueados);
+      total += await _aplicarMetodosPago(entidades['metodos_pago'], bloqueados);
       total += await _aplicarProductos(entidades['productos'], bloqueados);
       total += await _aplicarCodigos(entidades['producto_codigos'], bloqueados);
       total += await _aplicarVentas(entidades['ventas'], bloqueados);
       total += await _aplicarDetalles(entidades['venta_detalles']);
+      total += await _aplicarPagos(entidades['venta_pagos']);
       total += await _aplicarMovimientos(entidades['movimientos_inventario']);
       total += await _aplicarAlertas(entidades['alertas']);
       total += await _aplicarConfiguracion(entidades['configuracion']);
@@ -188,6 +190,61 @@ class SyncDao {
           );
     }
     return items.length;
+  }
+
+  Future<int> _aplicarMetodosPago(dynamic bloque, Set<String> bloqueados) async {
+    final items = _items(bloque).where((m) => !bloqueados.contains(m['uuid'])).toList();
+    for (final m in items) {
+      // `qrLocal` NO se toca: es la copia de este teléfono y el servidor no
+      // sabe nada de ella. Sobrescribirla con `absent` la perdería en cada
+      // bajada y el QR dejaría de verse sin conexión.
+      await db.into(db.metodosPago).insertOnConflictUpdate(
+            MetodosPagoCompanion.insert(
+              uuid: m['uuid'] as String,
+              nombre: m['nombre'] as String,
+              tipo: Value((m['tipo'] as String?) ?? 'OTRO'),
+              requiereReferencia: Value(_bool(m['requiere_referencia'])),
+              qrUrl: Value(m['qr_url'] as String?),
+              instrucciones: Value(m['instrucciones'] as String?),
+              color: Value((m['color'] as String?) ?? '#0E6B5C'),
+              orden: Value((m['orden'] as num?)?.toInt() ?? 0),
+              activo: Value(_bool(m['activo'], porDefecto: true)),
+              updatedAt: Value(_fecha(m['updated_at'])),
+              deletedAt: Value(_fechaOpcional(m['deleted_at'])),
+            ),
+          );
+    }
+    return items.length;
+  }
+
+  Future<int> _aplicarPagos(dynamic bloque) async {
+    final items = _items(bloque);
+    for (final p in items) {
+      await db.into(db.ventaPagos).insertOnConflictUpdate(
+            VentaPagosCompanion.insert(
+              uuid: p['uuid'] as String,
+              ventaUuid: p['venta_uuid'] as String,
+              metodoPagoUuid: Value(p['metodo_pago_uuid'] as String?),
+              metodoNombre: p['metodo_nombre'] as String,
+              metodoTipo: Value((p['metodo_tipo'] as String?) ?? 'OTRO'),
+              monto: _centavos(p['monto']),
+              montoRecibido: Value(
+                p['monto_recibido'] == null ? null : _centavos(p['monto_recibido']),
+              ),
+              cambio: Value(p['cambio'] == null ? null : _centavos(p['cambio'])),
+              referencia: Value(p['referencia'] as String?),
+            ),
+          );
+    }
+    return items.length;
+  }
+
+  /// MariaDB devuelve los TINYINT(1) como 0/1, no como booleanos.
+  bool _bool(dynamic v, {bool porDefecto = false}) {
+    if (v == null) return porDefecto;
+    if (v is bool) return v;
+    if (v is num) return v != 0;
+    return v.toString() == 'true' || v.toString() == '1';
   }
 
   Future<int> _aplicarProductos(dynamic bloque, Set<String> bloqueados) async {
@@ -423,6 +480,17 @@ class SyncDao {
   }
 
   // ── Configuración ─────────────────────────────────────────────────────────
+
+  /// Guarda una clave de configuración **en local**.
+  ///
+  /// La configuración del negocio no viaja por la cola de salida: la escribe el
+  /// administrador contra la API y baja a todos los dispositivos en el pull.
+  /// Esto sólo adelanta el efecto en ESTE teléfono para que la interfaz
+  /// responda al instante en vez de esperar la siguiente sincronización.
+  Future<void> guardarConfigLocal(String clave, String valor) =>
+      db.into(db.configuracion).insertOnConflictUpdate(
+            ConfiguracionCompanion.insert(clave: clave, valor: valor),
+          );
 
   Future<String?> config(String clave) async {
     final fila = await (db.select(db.configuracion)..where((t) => t.clave.equals(clave)))

@@ -100,6 +100,9 @@ class ApiClient {
   Future<Map<String, dynamic>> patch(String ruta, {Object? cuerpo}) => _ejecutar(
       () => _dio.patch<dynamic>('${AppConfig.versionApi}$ruta', data: cuerpo));
 
+  Future<Map<String, dynamic>> put(String ruta, {Object? cuerpo}) => _ejecutar(
+      () => _dio.put<dynamic>('${AppConfig.versionApi}$ruta', data: cuerpo));
+
   Future<Map<String, dynamic>> delete(String ruta) =>
       _ejecutar(() => _dio.delete<dynamic>('${AppConfig.versionApi}$ruta'));
 

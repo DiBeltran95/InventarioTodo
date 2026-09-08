@@ -119,11 +119,23 @@ class VentaDetallePage extends ConsumerWidget {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      _fila(context, 'Método de pago', _metodo(v.metodoPago)),
-                      if (v.montoRecibido != null)
-                        _fila(context, 'Recibido', Money(v.montoRecibido!).format()),
-                      if (v.cambio != null && v.cambio! > 0)
-                        _fila(context, 'Cambio', Money(v.cambio!).format()),
+
+                      // Con qué se cobró. Es la trazabilidad que responde
+                      // «esta venta, ¿entró por Nequi o en efectivo?» un mes
+                      // después, y en un cobro mixto es lo único que lo dice:
+                      // la columna heredada sólo guarda 'MIXTO'.
+                      if (venta.pagos.isEmpty) ...[
+                        _fila(context, 'Método de pago', _metodo(v.metodoPago)),
+                        if (v.montoRecibido != null)
+                          _fila(context, 'Recibido', Money(v.montoRecibido!).format()),
+                        if (v.cambio != null && v.cambio! > 0)
+                          _fila(context, 'Cambio', Money(v.cambio!).format()),
+                      ] else
+                        for (final pago in venta.pagos)
+                          _FilaPagoDetalle(pago: pago),
+
+                      if (venta.pagos.isNotEmpty && !venta.cambioTotal.esCero)
+                        _fila(context, 'Cambio', venta.cambioTotal.format()),
                     ],
                   ),
                 ),
@@ -432,6 +444,57 @@ class _Cabecera extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Una línea del desglose del cobro.
+class _FilaPagoDetalle extends StatelessWidget {
+  const _FilaPagoDetalle({required this.pago});
+
+  final VentaPago pago;
+
+  @override
+  Widget build(BuildContext context) {
+    final detalle = [
+      if (pago.montoRecibido != null && (pago.cambio ?? 0) > 0)
+        'recibido ${Money(pago.montoRecibido!).format()}',
+      if (pago.referencia != null) 'ref. ${pago.referencia}',
+    ].join(' · ');
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(_icono(pago.metodoTipo), size: 16, color: context.colores.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(pago.metodoNombre, style: context.textos.bodyMedium),
+                if (detalle.isNotEmpty)
+                  Text(
+                    detalle,
+                    style: context.textos.labelSmall?.copyWith(
+                      color: context.colores.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Text(Money(pago.monto).format(), style: context.textos.bodyMedium),
+        ],
+      ),
+    );
+  }
+
+  static IconData _icono(String tipo) => switch (tipo) {
+        'EFECTIVO' => Icons.payments_outlined,
+        'TARJETA' => Icons.credit_card_rounded,
+        'TRANSFERENCIA' => Icons.smartphone_rounded,
+        'CREDITO' => Icons.schedule_rounded,
+        _ => Icons.account_balance_wallet_outlined,
+      };
 }
 
 class _FilaDetalle extends StatelessWidget {
