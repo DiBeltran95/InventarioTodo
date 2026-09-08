@@ -1,10 +1,10 @@
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/database/daos/productos_dao.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/foto_producto.dart';
 import '../../../auth/presentation/auth_providers.dart';
 
 /// Fila de producto en la lista del catálogo.
@@ -53,7 +53,7 @@ class TarjetaProducto extends ConsumerWidget {
               // producto: el elemento se «expande» en vez de aparecer de golpe.
               Hero(
                 tag: 'producto-${item.uuid}',
-                child: _Miniatura(item: item),
+                child: FotoProducto(producto: item),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -128,84 +128,3 @@ class TarjetaProducto extends ConsumerWidget {
   }
 }
 
-class _Miniatura extends StatelessWidget {
-  const _Miniatura({required this.item});
-
-  final ProductoConCategoria item;
-
-  @override
-  Widget build(BuildContext context) {
-    final local = item.producto.imagenLocal;
-    final remota = item.producto.imagenUrl;
-
-    Widget marcador() => Container(
-          width: 52,
-          height: 52,
-          decoration: BoxDecoration(
-            color: _colorCategoria(context),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Center(
-            child: Text(
-              _iniciales(item.nombre),
-              style: context.textos.titleMedium?.copyWith(
-                color: context.colores.onSecondaryContainer,
-              ),
-            ),
-          ),
-        );
-
-    // La foto local tiene prioridad sobre la remota: mientras la imagen recién
-    // tomada no se ha subido, la del servidor todavía no existe.
-    if (local != null && File(local).existsSync()) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: Image.file(
-          File(local),
-          width: 52,
-          height: 52,
-          fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => marcador(),
-        ),
-      );
-    }
-
-    if (remota != null && remota.isNotEmpty) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: Image.network(
-          remota,
-          width: 52,
-          height: 52,
-          fit: BoxFit.cover,
-          // Sin conexión, `Image.network` falla: se cae al marcador en vez de
-          // dejar un hueco roto en la lista.
-          errorBuilder: (_, _, _) => marcador(),
-        ),
-      );
-    }
-
-    return marcador();
-  }
-
-  Color _colorCategoria(BuildContext context) {
-    final hex = item.categoria?.color;
-    if (hex == null || !hex.startsWith('#') || hex.length != 7) {
-      return context.colores.secondaryContainer;
-    }
-    final valor = int.tryParse(hex.substring(1), radix: 16);
-    if (valor == null) return context.colores.secondaryContainer;
-    // Se mezcla con la superficie para que un color chillón elegido en el
-    // catálogo no arruine la legibilidad de la lista.
-    return Color(0xFF000000 | valor).withValues(alpha: 0.22);
-  }
-
-  static String _iniciales(String nombre) {
-    final partes = nombre.trim().split(RegExp(r'\s+'));
-    if (partes.isEmpty || partes.first.isEmpty) return '?';
-    if (partes.length == 1) {
-      return partes.first.substring(0, partes.first.length.clamp(0, 2)).toUpperCase();
-    }
-    return (partes[0][0] + partes[1][0]).toUpperCase();
-  }
-}

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/config/datos_negocio.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/database/daos/ventas_dao.dart';
 import '../../../core/money/money.dart';
@@ -28,7 +29,7 @@ class VentaDetallePage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final asincrono = ref.watch(ventaProvider(uuid));
     final puedeAnular = ref.watch(rolProvider).puedeAnularVentas;
-    final negocio = ref.watch(nombreNegocioProvider);
+    final negocio = ref.watch(datosNegocioProvider);
 
     return asincrono.when(
       loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
@@ -188,10 +189,10 @@ class VentaDetallePage extends ConsumerWidget {
   Future<void> _compartir(
     BuildContext context,
     VentaCompleta venta,
-    String negocio,
+    DatosNegocio negocio,
   ) async {
     try {
-      await TicketPdf.compartir(venta, nombreNegocio: negocio);
+      await TicketPdf.compartir(venta, negocio: negocio);
     } catch (e) {
       if (context.mounted) {
         mostrarMensaje(context, 'No se pudo compartir: $e', esError: true);

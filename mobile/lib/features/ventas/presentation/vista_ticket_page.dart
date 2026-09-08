@@ -25,7 +25,7 @@ class VistaTicketPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final negocio = ref.watch(nombreNegocioProvider);
+    final negocio = ref.watch(datosNegocioProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -49,7 +49,7 @@ class VistaTicketPage extends ConsumerWidget {
         ),
       ),
       body: PdfPreview(
-        build: (formato) => TicketPdf.generar(venta, nombreNegocio: negocio),
+        build: (formato) => TicketPdf.generar(venta, negocio: negocio),
 
         // Rollo de 80 mm: es el formato real de una térmica de mostrador.
         // Dejar cambiarlo a A4 sólo invita a desperdiciar media hoja por ticket.

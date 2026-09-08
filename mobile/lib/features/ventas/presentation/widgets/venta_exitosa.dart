@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/config/datos_negocio.dart';
 import '../../../../core/database/daos/ventas_dao.dart';
 import '../../../../core/providers/providers.dart';
 import '../../../../core/sync/estado_sync.dart';
@@ -39,7 +40,7 @@ class VentaExitosa extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final cambio = venta.cambio;
     final hayCambio = cambio.esPositivo;
-    final negocio = ref.watch(nombreNegocioProvider);
+    final negocio = ref.watch(datosNegocioProvider);
 
     return Scaffold(
       body: SafeArea(
@@ -141,9 +142,9 @@ class VentaExitosa extends ConsumerWidget {
     );
   }
 
-  Future<void> _compartir(BuildContext context, String negocio) async {
+  Future<void> _compartir(BuildContext context, DatosNegocio negocio) async {
     try {
-      await TicketPdf.compartir(venta, nombreNegocio: negocio);
+      await TicketPdf.compartir(venta, negocio: negocio);
     } catch (e) {
       if (context.mounted) {
         mostrarMensaje(context, 'No se pudo compartir: $e', esError: true);

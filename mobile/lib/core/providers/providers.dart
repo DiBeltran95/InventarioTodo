@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../config/datos_negocio.dart';
 import '../database/app_database.dart';
 import '../database/daos/categorias_dao.dart';
 import '../database/daos/inventario_dao.dart';
@@ -133,12 +134,20 @@ final configuracionProvider = StreamProvider<Map<String, String>>(
   (ref) => ref.watch(syncDaoProvider).observarConfiguracion(),
 );
 
-final nombreNegocioProvider = Provider<String>((ref) {
+/// Identidad del negocio para el ticket: nombre, NIT, contacto y pie.
+///
+/// Sale de la configuración que baja en el pull, así que el comprobante se
+/// imprime igual de completo en modo avión.
+final datosNegocioProvider = Provider<DatosNegocio>((ref) {
   return ref.watch(configuracionProvider).maybeWhen(
-        data: (c) => c['nombre_negocio'] ?? 'Mi Negocio',
-        orElse: () => 'Mi Negocio',
+        data: DatosNegocio.desdeConfig,
+        orElse: () => const DatosNegocio(nombre: 'Mi Negocio'),
       );
 });
+
+final nombreNegocioProvider = Provider<String>(
+  (ref) => ref.watch(datosNegocioProvider).nombre,
+);
 
 /// Nombre de cada usuario, indexado por UUID.
 ///

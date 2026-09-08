@@ -196,6 +196,13 @@ class AjustesPage extends ConsumerWidget {
                   onTap: () => context.push(Rutas.usuarios),
                 ),
                 ListTile(
+                  leading: const Icon(Icons.storefront_outlined),
+                  title: const Text('Datos del negocio'),
+                  subtitle: const Text('Nombre, NIT y contacto del ticket'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push(Rutas.negocio),
+                ),
+                ListTile(
                   leading: const Icon(Icons.account_balance_wallet_outlined),
                   title: const Text('Medios de pago'),
                   subtitle: const Text('Con qué cobras y el QR del cliente'),

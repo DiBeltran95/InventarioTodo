@@ -13,6 +13,7 @@ import '../../../core/money/money.dart';
 import '../../../core/providers/providers.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/foto_producto.dart';
 import '../../ventas/presentation/carrito_provider.dart';
 import '../domain/modo_escaner.dart';
 import 'marco_escaner.dart';
@@ -471,19 +472,36 @@ class _TarjetaResultado extends StatelessWidget {
       children: [
         Row(
           children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: context.dominio.exitoContenedor,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                Icons.check_rounded,
-                color: context.dominio.exito,
-              ),
+            // La foto del producto, no un icono de «ok». Al escanear en cadena
+            // el vendedor no lee el nombre: mira la tarjeta un instante y sigue.
+            // Con dos artículos de nombre casi idéntico —«Gaseosa 400» y
+            // «Gaseosa 400 zero»— la imagen es lo único que delata el error a
+            // tiempo, mientras el «Deshacer» aún está en pantalla.
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                FotoProducto(producto: producto, tamano: 56, radio: 14),
+                // La palomita se conserva, encima y pequeña: es la confirmación
+                // de que se añadió, y sin ella la foto sola no lo dice.
+                Positioned(
+                  right: -4,
+                  bottom: -4,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: context.colores.surface,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.check_circle_rounded,
+                      size: 18,
+                      color: context.dominio.exito,
+                    ),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

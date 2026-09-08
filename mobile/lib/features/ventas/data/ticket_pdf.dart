@@ -4,6 +4,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../../core/config/datos_negocio.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/database/daos/ventas_dao.dart';
 import '../../../core/money/money.dart';
@@ -22,12 +23,14 @@ class TicketPdf {
 
   static Future<Uint8List> generar(
     VentaCompleta venta, {
-    required String nombreNegocio,
-    String? nit,
-    String? direccion,
-    String? telefono,
-    String? mensajeFinal,
+    required DatosNegocio negocio,
   }) async {
+    final nombreNegocio = negocio.nombre;
+    final nit = negocio.nit;
+    final direccion = negocio.direccion;
+    final telefono = negocio.telefono;
+    final mensajeFinal = negocio.pieTicket;
+
     final documento = pw.Document(title: 'Ticket ${venta.venta.numero}');
     final v = venta.venta;
 
@@ -124,8 +127,8 @@ class TicketPdf {
   }
 
   /// Abre el diálogo de impresión del sistema (incluye «Guardar como PDF»).
-  static Future<void> imprimir(VentaCompleta venta, {required String nombreNegocio}) async {
-    final bytes = await generar(venta, nombreNegocio: nombreNegocio);
+  static Future<void> imprimir(VentaCompleta venta, {required DatosNegocio negocio}) async {
+    final bytes = await generar(venta, negocio: negocio);
     await Printing.layoutPdf(
       onLayout: (formato) => bytes,
       name: 'ticket-${venta.venta.numero}.pdf',
@@ -133,8 +136,8 @@ class TicketPdf {
   }
 
   /// Comparte el ticket por WhatsApp, correo, etc.
-  static Future<void> compartir(VentaCompleta venta, {required String nombreNegocio}) async {
-    final bytes = await generar(venta, nombreNegocio: nombreNegocio);
+  static Future<void> compartir(VentaCompleta venta, {required DatosNegocio negocio}) async {
+    final bytes = await generar(venta, negocio: negocio);
     await Printing.sharePdf(bytes: bytes, filename: 'ticket-${venta.venta.numero}.pdf');
   }
 
