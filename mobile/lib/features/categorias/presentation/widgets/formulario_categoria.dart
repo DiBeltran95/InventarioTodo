@@ -6,6 +6,7 @@ import '../../../../core/database/app_database.dart';
 import '../../../../core/database/daos/categorias_dao.dart';
 import '../../../../core/providers/providers.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/encabezado_hoja.dart';
 import '../../../../core/widgets/estados.dart';
 
 /// Alta y edición de categoría.
@@ -114,11 +115,10 @@ class _FormularioCategoriaState extends ConsumerState<FormularioCategoria> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  _esEdicion ? 'Editar categoría' : 'Nueva categoría',
-                  style: context.textos.headlineSmall,
+                EncabezadoHoja(
+                  titulo: _esEdicion ? 'Editar categoría' : 'Nueva categoría',
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
 
                 TextFormField(
                   controller: _nombre,

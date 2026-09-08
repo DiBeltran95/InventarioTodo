@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/fechas.dart';
+import '../../../core/widgets/encabezado_hoja.dart';
 import '../../../core/widgets/estados.dart';
 import '../domain/sesion.dart';
 import 'auth_providers.dart';
@@ -387,11 +388,10 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  _esEdicion ? 'Editar cuenta' : 'Nueva cuenta',
-                  style: context.textos.headlineSmall,
+                EncabezadoHoja(
+                  titulo: _esEdicion ? 'Editar cuenta' : 'Nueva cuenta',
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
 
                 TextFormField(
                   controller: _nombre,

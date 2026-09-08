@@ -150,14 +150,23 @@ class CarritoPage extends ConsumerWidget {
     // Pantalla de confirmación a página completa, no un snackbar: el vendedor
     // necesita ver el cambio a devolver y decidir sobre el ticket antes de
     // atender al siguiente cliente.
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
+    final salida = await Navigator.of(context).push(
+      MaterialPageRoute<SalidaVenta>(
         builder: (_) => VentaExitosa(venta: venta),
         fullscreenDialog: true,
       ),
     );
 
-    if (context.mounted) context.pop();
+    if (!context.mounted) return;
+
+    // `go` en vez de `pop` para el inicio: el carrito y el escáner quedan
+    // debajo en la pila, y salir de ellos de uno en uno dejaría al vendedor
+    // pasando por pantallas de una venta ya cerrada.
+    if (salida == SalidaVenta.inicio) {
+      context.go(Rutas.dashboard);
+    } else {
+      context.pop();
+    }
   }
 }
 

@@ -12,6 +12,15 @@ import '../../data/ticket_pdf.dart';
 import '../ventas_providers.dart';
 import '../vista_ticket_page.dart';
 
+/// Qué quiere hacer el vendedor después de cobrar.
+enum SalidaVenta {
+  /// Atender al siguiente cliente: vuelve al punto de venta.
+  nuevaVenta,
+
+  /// Terminó el momento de caja: vuelve al inicio.
+  inicio,
+}
+
 /// Confirmación de venta.
 ///
 /// Lo más grande de la pantalla es el **cambio a devolver**, no el total: es lo
@@ -109,10 +118,21 @@ class VentaExitosa extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 12),
+              // Dos salidas, porque hay dos situaciones reales: la cola sigue
+              // (otra venta ya) o se acabó el momento de caja y se vuelve al
+              // inicio. Antes sólo existía la primera y para volver al inicio
+              // había que empezar una venta y cancelarla.
               FilledButton(
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: () => Navigator.of(context).pop(SalidaVenta.nuevaVenta),
                 style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
                 child: const Text('Nueva venta'),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: () => Navigator.of(context).pop(SalidaVenta.inicio),
+                icon: const Icon(Icons.home_outlined, size: 18),
+                label: const Text('Ir al inicio'),
+                style: TextButton.styleFrom(minimumSize: const Size.fromHeight(48)),
               ),
             ],
           ),

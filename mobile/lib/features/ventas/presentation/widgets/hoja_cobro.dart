@@ -472,7 +472,27 @@ class _CamposDelPago extends StatelessWidget {
             // Vacío = «el resto con esto»: lo normal es pagar todo con un medio,
             // y así no hay que teclear el importe exacto.
             helperText: 'Vacío = ${pendiente.format()} (todo lo pendiente)',
+            suffixIcon: monto.text.isEmpty
+                ? null
+                : IconButton(
+                    onPressed: () {
+                      monto.clear();
+                      onCambio();
+                    },
+                    icon: const Icon(Icons.backspace_outlined, size: 18),
+                    tooltip: 'Borrar el importe',
+                  ),
           ),
+        ),
+        const SizedBox(height: 10),
+        _Rapidos(
+          pendiente: pendiente,
+          esEfectivo: metodo.esEfectivo,
+          onElegir: (m) {
+            monto.text = textoDeMonto(m);
+            monto.selection = TextSelection.collapsed(offset: monto.text.length);
+            onCambio();
+          },
         ),
 
         if (metodo.esEfectivo && !cambio.esCero) ...[
@@ -553,4 +573,83 @@ class _SinMetodos extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Importes de un toque.
+///
+/// Teclear «23.400» con el cliente esperando es lento y se presta a errores de
+/// un dígito, que luego aparecen como descuadre de caja. Aquí se ofrece:
+///
+/// * **Todo el resto**: lo que falte por cobrar. Es el caso normal —un solo
+///   medio, o el último tramo de un pago repartido— y en un pago mixto es
+///   justo el «poner automáticamente el restante»: tras 1.000 en efectivo,
+///   Transferencia ya propone la diferencia exacta.
+/// * **Billetes** (sólo efectivo): los que el cliente puede entregar por encima
+///   del pendiente, para que el cambio salga calculado sin teclear nada.
+class _Rapidos extends StatelessWidget {
+  const _Rapidos({
+    required this.pendiente,
+    required this.esEfectivo,
+    required this.onElegir,
+  });
+
+  final Money pendiente;
+  final bool esEfectivo;
+  final ValueChanged<Money> onElegir;
+
+  /// Billetes en circulación por encima del pendiente, más el redondeo al mil
+  /// siguiente, que es como suele pagarse en efectivo.
+  List<Money> get _billetes {
+    if (!esEfectivo || pendiente.esCero) return const [];
+
+    final propuestas = <int>{};
+
+    // Siguiente múltiplo de 1.000 (100.000 centavos).
+    const mil = 100000;
+    final redondeo = ((pendiente.centavos ~/ mil) + 1) * mil;
+    if (redondeo > pendiente.centavos) propuestas.add(redondeo);
+
+    for (final billete in const [
+      500000, 1000000, 2000000, 5000000, 10000000, // 5k, 10k, 20k, 50k, 100k
+    ]) {
+      if (billete > pendiente.centavos) propuestas.add(billete);
+    }
+
+    final lista = propuestas.toList()..sort();
+    // Más de tres opciones convierte el atajo en otra decisión.
+    return lista.take(3).map(Money.new).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (pendiente.esCero) return const SizedBox.shrink();
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        ActionChip(
+          avatar: const Icon(Icons.done_all_rounded, size: 16),
+          label: Text('Todo el resto · ${pendiente.format()}'),
+          onPressed: () => onElegir(pendiente),
+        ),
+        for (final b in _billetes)
+          ActionChip(
+            avatar: const Icon(Icons.payments_outlined, size: 16),
+            label: Text(b.format()),
+            onPressed: () => onElegir(b),
+          ),
+      ],
+    );
+  }
+}
+
+/// Pasa un [Money] al texto que espera el campo de importe.
+///
+/// El campo se lee quitando separadores de miles, así que aquí se escribe sin
+/// ellos; los decimales sólo aparecen si los hay.
+String textoDeMonto(Money valor) {
+  final centavos = valor.centavos;
+  if (centavos % 100 == 0) return (centavos ~/ 100).toString();
+  return (centavos / 100).toStringAsFixed(2);
 }

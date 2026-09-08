@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/database/app_database.dart';
 import '../../../../core/providers/providers.dart';
-import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/encabezado_hoja.dart';
 import '../../../../core/widgets/estados.dart';
 
 /// Alta y edición de proveedor.
@@ -146,11 +146,10 @@ class _FormularioProveedorState extends ConsumerState<FormularioProveedor> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  _esEdicion ? 'Editar proveedor' : 'Nuevo proveedor',
-                  style: context.textos.headlineSmall,
+                EncabezadoHoja(
+                  titulo: _esEdicion ? 'Editar proveedor' : 'Nuevo proveedor',
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
 
                 TextFormField(
                   controller: _nombre,

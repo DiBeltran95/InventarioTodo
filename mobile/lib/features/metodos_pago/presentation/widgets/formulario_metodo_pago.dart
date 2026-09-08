@@ -9,6 +9,7 @@ import '../../../../core/database/app_database.dart';
 import '../../../../core/database/daos/metodos_pago_dao.dart';
 import '../../../../core/providers/providers.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/encabezado_hoja.dart';
 import '../../../../core/widgets/estados.dart';
 import '../../../categorias/presentation/widgets/formulario_categoria.dart' show colorDesdeHex;
 import '../../data/imagen_qr.dart';
@@ -157,11 +158,11 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  _esEdicion ? 'Editar medio de pago' : 'Nuevo medio de pago',
-                  style: context.textos.headlineSmall,
+                EncabezadoHoja(
+                  titulo: _esEdicion ? 'Editar medio de pago' : 'Nuevo medio de pago',
+                  subtitulo: 'Con qué cobra tu negocio',
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
 
                 TextFormField(
                   controller: _nombre,
