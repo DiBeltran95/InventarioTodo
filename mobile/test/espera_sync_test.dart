@@ -56,6 +56,24 @@ void main() {
       expect(Fechas.enCuanto(DateTime.now().add(const Duration(minutes: 3))), 'en 3 min');
     });
 
+    // Los milisegundos que tarda la propia llamada no pueden cambiar el texto:
+    // truncando, «en 40 s» se convertía en «en 39 s» y la prueba fallaba sólo
+    // en las máquinas lentas.
+    test('el tiempo que tarda la llamada no descuenta una unidad', () {
+      expect(
+        Fechas.enCuanto(
+          DateTime.now().add(const Duration(seconds: 40) - const Duration(milliseconds: 40)),
+        ),
+        'en 40 s',
+      );
+      expect(
+        Fechas.enCuanto(
+          DateTime.now().add(const Duration(minutes: 3) - const Duration(milliseconds: 40)),
+        ),
+        'en 3 min',
+      );
+    });
+
     test('un vencimiento pasado es «ya», nunca un número negativo', () {
       expect(Fechas.enCuanto(DateTime.now().subtract(const Duration(minutes: 5))), 'ya');
     });

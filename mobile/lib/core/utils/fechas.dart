@@ -68,11 +68,21 @@ class Fechas {
   /// que todavía no ha ocurrido.
   static String enCuanto(DateTime? cuando) {
     if (cuando == null) return 'enseguida';
-    final falta = cuando.difference(DateTime.now());
-    if (falta.isNegative || falta.inSeconds < 5) return 'ya';
-    if (falta.inSeconds < 60) return 'en ${falta.inSeconds} s';
-    if (falta.inMinutes < 60) return 'en ${falta.inMinutes} min';
-    return 'en ${falta.inHours} h';
+    final ms = cuando.difference(DateTime.now()).inMilliseconds;
+    if (ms < 5000) return 'ya';
+
+    // Se redondea hacia ARRIBA. Truncando, a falta de 39,9 s se anuncia «en
+    // 39 s» y la cuenta se queda corta; y como una espera se calcula a partir
+    // de un instante ya pasado, la unidad recién cumplida se pierde siempre.
+    int arriba(int unidadMs) => (ms + unidadMs - 1) ~/ unidadMs;
+
+    final segundos = arriba(1000);
+    if (segundos < 60) return 'en $segundos s';
+
+    final minutos = arriba(60 * 1000);
+    if (minutos < 60) return 'en $minutos min';
+
+    return 'en ${arriba(60 * 60 * 1000)} h';
   }
 
   /// «hace 3 min», «ayer», «14 mar». Para el chip de sincronización y las listas.
