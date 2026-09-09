@@ -101,6 +101,7 @@ async function registrarPagos(conn, { ventaId, total, numero, pagos, metodoLegad
         pago.monto,
         pago.monto_recibido ?? null,
         pago.cambio ?? null,
+        pago.referencia ?? null,
       ],
     );
   }
