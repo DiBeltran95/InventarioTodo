@@ -57,7 +57,7 @@ class TicketPdf {
             pw.SizedBox(height: 8),
             _divisor(),
             _fila('Ticket', v.numero, negrita: true),
-            _fila('Fecha', Fechas.formatFechaHora(v.fecha)),
+            _fila('Fecha', Fechas.formatFechaHoraDocumento(v.fecha)),
             if (v.clienteNombre != null) _fila('Cliente', v.clienteNombre!),
             if (v.estado == 'ANULADA')
               pw.Center(
@@ -100,18 +100,20 @@ class TicketPdf {
                 _fila('Cambio', venta.cambioTotal.format(), negrita: true),
             ],
 
-            pw.SizedBox(height: 10),
-            // Marca honesta del estado real del documento. Si la venta aún no
-            // salió del dispositivo, el ticket lo dice: es preferible a que el
-            // dueño lo descubra al cuadrar caja.
-            if (venta.pendienteDeSync)
-              pw.Center(
-                child: pw.Text(
-                  'Pendiente de sincronizar',
-                  style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700),
-                ),
-              ),
-            pw.SizedBox(height: 6),
+            // Aquí iba «Pendiente de sincronizar», y estaba mal por dos razones.
+            //
+            // La primera es que casi siempre mentía: el ticket se genera en el
+            // mismo instante del cobro, cuando el envío todavía no ha salido,
+            // así que el sello aparecía incluso con cobertura perfecta.
+            //
+            // La segunda es peor: un PDF es una foto. Aunque la venta se
+            // sincronice dos segundos después, el papel impreso —o el que se
+            // mandó por WhatsApp— repite ese aviso para siempre.
+            //
+            // El estado de envío es asunto del vendedor, no del cliente, y ya
+            // se muestra **en vivo** en la pantalla de venta registrada y en el
+            // detalle de la venta, donde sí cambia solo al completarse.
+            pw.SizedBox(height: 12),
             pw.Center(
               child: pw.Text(
                 mensajeFinal ?? '¡Gracias por su compra!',

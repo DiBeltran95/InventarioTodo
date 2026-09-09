@@ -15,6 +15,15 @@ class Fechas {
   static final _iso = DateFormat('yyyy-MM-dd');
   static final _hora = DateFormat('HH:mm', 'es_CO');
   static final _fechaHora = DateFormat("d 'de' MMMM, HH:mm", 'es_CO');
+
+  /// Fecha de un documento impreso: siempre con año y en numérico.
+  ///
+  /// En pantalla el año sobra —lo que se mira es de hoy o de esta semana—,
+  /// pero un ticket se guarda, se reclama meses después y a veces se archiva
+  /// junto a los del año pasado. Sin año no sirve como soporte de la compra.
+  /// Numérico además de por espacio: en 80 mm «14 de septiembre de 2026,
+  /// 15:42» parte la línea en dos.
+  static final _fechaHoraDocumento = DateFormat('dd/MM/yyyy HH:mm', 'es_CO');
   static final _fechaCorta = DateFormat('d MMM', 'es_CO');
   static final _fechaLarga = DateFormat("EEEE d 'de' MMMM 'de' y", 'es_CO');
 
@@ -44,6 +53,9 @@ class Fechas {
 
   static String formatHora(DateTime utc) => _hora.format(aHoraNegocio(utc));
   static String formatFechaHora(DateTime utc) => _fechaHora.format(aHoraNegocio(utc));
+
+  static String formatFechaHoraDocumento(DateTime utc) =>
+      _fechaHoraDocumento.format(aHoraNegocio(utc));
   static String formatFechaCorta(DateTime utc) => _fechaCorta.format(aHoraNegocio(utc));
 
   static String formatDiaIso(String diaIso) =>
