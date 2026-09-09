@@ -59,6 +59,7 @@ class SyncEngine extends ChangeNotifier {
   StreamSubscription<bool>? _subConectividad;
   StreamSubscription<int>? _subPendientes;
   StreamSubscription<int>? _subRechazadas;
+  StreamSubscription<SyncOutboxData?>? _subEspera;
   bool _enMarcha = false;
   bool _iniciado = false;
 
@@ -81,6 +82,17 @@ class SyncEngine extends ChangeNotifier {
 
     _subRechazadas = _outbox.contarRechazadas().listen((n) {
       _fijar(_estado.copyWith(rechazadas: n));
+    });
+
+    // Una operación puede estar «pendiente» y a la vez frenada por su backoff.
+    // Se observa para poder decirlo en vez de dejar la pantalla en un estado
+    // que se contradice: «4 por enviar» junto a «al día».
+    _subEspera = _outbox.observarPrimeraEnEspera().listen((fila) {
+      _fijar(_estado.copyWith(
+        esperaHasta: fila?.proximoIntento,
+        errorEnCola: fila?.ultimoError,
+        limpiarEspera: fila == null,
+      ));
     });
 
     _subConectividad = _conectividad.cambios.listen((hayRed) {
@@ -123,11 +135,19 @@ class SyncEngine extends ChangeNotifier {
   }
 
   /// Ejecuta una pasada completa.
+  ///
+  /// [forzar] adelanta los reintentos en espera. Lo usa el botón «Sincronizar
+  /// ahora»: cuando alguien lo pulsa está diciendo que la causa del fallo ya se
+  /// corrigió, y respetar el backoff en ese momento convierte el botón en un
+  /// no-op silencioso.
   Future<ResultadoSync> sincronizar({
     String motivo = 'manual',
     bool silenciosa = false,
+    bool forzar = false,
   }) async {
     if (_enMarcha) return const ResultadoSync();
+
+    if (forzar) await _outbox.reactivarEnEspera();
 
     if (!_conectividad.hayRed) {
       final vivo = await _conectividad.verificar();
@@ -411,6 +431,7 @@ class SyncEngine extends ChangeNotifier {
     _subConectividad?.cancel();
     _subPendientes?.cancel();
     _subRechazadas?.cancel();
+    _subEspera?.cancel();
     super.dispose();
   }
 }

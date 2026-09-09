@@ -54,6 +54,38 @@ class OutboxDao {
         .get();
   }
 
+  /// La primera operación que está esperando su turno de reintento.
+  ///
+  /// La cola distingue «pendiente» de «lista para enviar»: tras un fallo, la
+  /// fila sigue contando como pendiente pero no sale hasta que vence su
+  /// backoff. Sin esto, la app enseñaba «4 por enviar» y a la vez «al día»,
+  /// que es una contradicción que nadie puede interpretar. Devuelve la fila
+  /// para poder decir CUÁNDO se reintenta y POR QUÉ falló.
+  Stream<SyncOutboxData?> observarPrimeraEnEspera() {
+    return (db.select(db.syncOutbox)
+          ..where((t) =>
+              t.estado.isIn(['PENDIENTE', 'ENVIANDO']) &
+              t.proximoIntento.isBiggerThanValue(DateTime.now()))
+          ..orderBy([(t) => OrderingTerm.asc(t.proximoIntento)])
+          ..limit(1))
+        .watchSingleOrNull();
+  }
+
+  /// Adelanta el reintento de todo lo que está en espera.
+  ///
+  /// El backoff existe para no machacar un servidor caído, pero cuando la
+  /// persona pulsa «Sincronizar ahora» está afirmando algo que la app no sabe:
+  /// que la causa del fallo ya se corrigió —volvió el wifi, se reinició el
+  /// servidor—. Esperar quince minutos más contra su voluntad hacía que el
+  /// botón pareciera roto: no se enviaba nada y tampoco aparecía ningún error.
+  Future<int> reactivarEnEspera() {
+    return (db.update(db.syncOutbox)
+          ..where((t) =>
+              t.estado.isIn(['PENDIENTE', 'ENVIANDO']) &
+              t.proximoIntento.isBiggerThanValue(DateTime.now())))
+        .write(SyncOutboxCompanion(proximoIntento: Value(DateTime.now())));
+  }
+
   Stream<int> contarPendientes() {
     final consulta = db.selectOnly(db.syncOutbox)
       ..addColumns([db.syncOutbox.id.count()])

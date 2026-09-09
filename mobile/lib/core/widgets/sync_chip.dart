@@ -148,6 +148,59 @@ class _HojaSync extends ConsumerWidget {
                 valor: '${estado.rechazadas}',
                 color: dominio.peligro,
               ),
+
+            // Que algo esté pendiente no significa que esté saliendo. Tras un
+            // fallo la cola espera antes de reintentar, y callarlo dejaba la
+            // pantalla diciendo a la vez «hay conexión», «última
+            // sincronización: hace un momento» y «4 por enviar», sin ninguna
+            // pista de por qué el número no baja.
+            if (estado.enEspera) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: dominio.advertenciaContenedor,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.timer_outlined, size: 18, color: dominio.advertencia),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'El último envío falló. Se reintenta '
+                            '${Fechas.enCuanto(estado.esperaHasta)}.',
+                            style: context.textos.bodySmall?.copyWith(
+                              color: dominio.advertencia,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (estado.errorEnCola != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        estado.errorEnCola!,
+                        style: context.textos.bodySmall
+                            ?.copyWith(color: dominio.advertencia),
+                      ),
+                    ],
+                    const SizedBox(height: 6),
+                    Text(
+                      '«Sincronizar ahora» no espera: reintenta de inmediato.',
+                      style: context.textos.bodySmall?.copyWith(
+                        color: dominio.advertencia,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (estado.ultimoError != null) ...[
               const SizedBox(height: 12),
               Container(
@@ -183,7 +236,7 @@ class _HojaSync extends ConsumerWidget {
                     onPressed: estado.trabajando
                         ? null
                         : () {
-                            ref.read(syncEngineProvider).sincronizar();
+                            ref.read(syncEngineProvider).sincronizar(forzar: true);
                             Navigator.pop(context);
                           },
                     icon: const Icon(Icons.sync_rounded),

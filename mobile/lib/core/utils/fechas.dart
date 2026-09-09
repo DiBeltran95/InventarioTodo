@@ -64,6 +64,17 @@ class Fechas {
   static String formatDiaCorto(String diaIso) =>
       _fechaCorta.format(DateTime.parse('${diaIso}T12:00:00'));
 
+  /// «ya», «en 40 s», «en 3 min». Cuenta hacia adelante, para un reintento
+  /// que todavía no ha ocurrido.
+  static String enCuanto(DateTime? cuando) {
+    if (cuando == null) return 'enseguida';
+    final falta = cuando.difference(DateTime.now());
+    if (falta.isNegative || falta.inSeconds < 5) return 'ya';
+    if (falta.inSeconds < 60) return 'en ${falta.inSeconds} s';
+    if (falta.inMinutes < 60) return 'en ${falta.inMinutes} min';
+    return 'en ${falta.inHours} h';
+  }
+
   /// «hace 3 min», «ayer», «14 mar». Para el chip de sincronización y las listas.
   static String relativo(DateTime? utc) {
     if (utc == null) return 'nunca';

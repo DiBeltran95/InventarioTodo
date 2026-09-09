@@ -28,6 +28,8 @@ class EstadoSync {
     this.ultimoSync,
     this.ultimoError,
     this.progresoTexto,
+    this.esperaHasta,
+    this.errorEnCola,
   });
 
   final FaseSync fase;
@@ -40,6 +42,19 @@ class EstadoSync {
   final DateTime? ultimoSync;
   final String? ultimoError;
   final String? progresoTexto;
+
+  /// Cuándo vence el backoff de la primera operación en espera.
+  ///
+  /// Mientras no venza, esas operaciones cuentan como pendientes pero no salen
+  /// aunque haya red. Decirlo es la diferencia entre «no pasa nada» y «se
+  /// reintenta en 3 min».
+  final DateTime? esperaHasta;
+
+  /// Por qué falló la última vez lo que está esperando.
+  final String? errorEnCola;
+
+  /// Hay operaciones frenadas por el backoff, no por falta de red.
+  bool get enEspera => esperaHasta != null && esperaHasta!.isAfter(DateTime.now());
 
   bool get hayConexion => fase != FaseSync.sinConexion;
   bool get trabajando => fase == FaseSync.sincronizando;
@@ -63,6 +78,9 @@ class EstadoSync {
     bool limpiarError = false,
     String? progresoTexto,
     bool limpiarProgreso = false,
+    DateTime? esperaHasta,
+    String? errorEnCola,
+    bool limpiarEspera = false,
   }) =>
       EstadoSync(
         fase: fase ?? this.fase,
@@ -71,6 +89,8 @@ class EstadoSync {
         ultimoSync: ultimoSync ?? this.ultimoSync,
         ultimoError: limpiarError ? null : (ultimoError ?? this.ultimoError),
         progresoTexto: limpiarProgreso ? null : (progresoTexto ?? this.progresoTexto),
+        esperaHasta: limpiarEspera ? null : (esperaHasta ?? this.esperaHasta),
+        errorEnCola: limpiarEspera ? null : (errorEnCola ?? this.errorEnCola),
       );
 }
 
