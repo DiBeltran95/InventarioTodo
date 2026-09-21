@@ -11,6 +11,7 @@ import '../../../core/utils/fechas.dart';
 import '../../../core/widgets/contador_animado.dart';
 import '../../../core/widgets/estados.dart';
 import '../../../core/widgets/sync_chip.dart';
+import '../../auth/domain/sesion.dart';
 import '../../auth/presentation/auth_providers.dart';
 import 'dashboard_providers.dart';
 
@@ -166,10 +167,14 @@ class _AvisoCaducidad extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final sesion = ref.watch(sesionProvider).value;
-    if (sesion == null || !sesion.avisarCaducidad) return const SizedBox.shrink();
+    // Se lee de `estado_app` en vivo, no de la sesión: la sesión se calcula una
+    // vez al abrir, y así el aviso no se enteraría de que la sincronización
+    // acaba de renovar la gracia.
+    if (ref.watch(sesionProvider).value == null) return const SizedBox.shrink();
+    final limite = ref.watch(estadoAppProvider).value?.offlineValidoHasta;
+    if (!debeAvisarCaducidad(limite)) return const SizedBox.shrink();
 
-    final dias = sesion.diasRestantes ?? 0;
+    final dias = diasDeGraciaRestantes(limite) ?? 0;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Container(
@@ -185,7 +190,8 @@ class _AvisoCaducidad extends ConsumerWidget {
             Expanded(
               child: Text(
                 dias == 0
-                    ? 'Tu sesión sin conexión caduca hoy. Conéctate a internet.'
+                    ? 'Llevas días sin sincronizar. Conéctate a internet para '
+                        'seguir trabajando sin conexión.'
                     : 'Te quedan $dias día${dias == 1 ? '' : 's'} para operar sin '
                         'conexión. Conéctate para renovar.',
                 style: context.textos.bodySmall

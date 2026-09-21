@@ -86,16 +86,9 @@ class Sesion {
 
   /// Días que quedan de operación offline. Se avisa al usuario cuando bajan de
   /// dos: quedarse fuera a mitad de un turno sería inaceptable.
-  int? get diasRestantes {
-    if (validaHasta == null) return null;
-    final dias = validaHasta!.difference(DateTime.now().toUtc()).inDays;
-    return dias < 0 ? 0 : dias;
-  }
+  int? get diasRestantes => diasDeGraciaRestantes(validaHasta);
 
-  bool get avisarCaducidad {
-    final d = diasRestantes;
-    return d != null && d <= 2;
-  }
+  bool get avisarCaducidad => debeAvisarCaducidad(validaHasta);
 
   String get iniciales {
     final partes = nombre.trim().split(RegExp(r'\s+'));
@@ -103,6 +96,22 @@ class Sesion {
     if (partes.length == 1) return partes.first.substring(0, 1).toUpperCase();
     return (partes.first.substring(0, 1) + partes.last.substring(0, 1)).toUpperCase();
   }
+}
+
+/// Días que quedan para operar sin ver al servidor. Nunca negativo.
+///
+/// [ahora] se inyecta para poder probarlo sin depender del reloj.
+int? diasDeGraciaRestantes(DateTime? limite, {DateTime? ahora}) {
+  if (limite == null) return null;
+  final dias = limite.toUtc().difference((ahora ?? DateTime.now()).toUtc()).inDays;
+  return dias < 0 ? 0 : dias;
+}
+
+/// Se avisa cuando quedan dos días o menos: quedarse fuera a mitad de un turno
+/// sería inaceptable.
+bool debeAvisarCaducidad(DateTime? limite, {DateTime? ahora}) {
+  final d = diasDeGraciaRestantes(limite, ahora: ahora);
+  return d != null && d <= 2;
 }
 
 class ResultadoLogin {

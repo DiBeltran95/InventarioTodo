@@ -153,9 +153,10 @@ class AjustesPage extends ConsumerWidget {
                 leading: const Icon(Icons.timelapse_rounded),
                 title: const Text('Operación sin conexión'),
                 subtitle: Text(
-                  sesion?.validaHasta == null
+                  // De `estado_app` en vivo: la sincronización la renueva.
+                  estado?.offlineValidoHasta == null
                       ? 'Sin límite registrado'
-                      : 'Válida hasta ${Fechas.formatFechaHora(sesion!.validaHasta!)}',
+                      : 'Válida hasta ${Fechas.formatFechaHora(estado!.offlineValidoHasta!)}',
                 ),
               ),
               ListTile(

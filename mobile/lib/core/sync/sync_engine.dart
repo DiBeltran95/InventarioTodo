@@ -186,8 +186,21 @@ class SyncEngine extends ChangeNotifier {
       recibidas = await _bajar();
       await _sync.purgarMovimientosDuplicadosDeVenta();
 
-      await (_db.update(_db.estadoApp)..where((t) => t.id.equals(1)))
-          .write(EstadoAppCompanion(ultimoSyncExitoso: Value(DateTime.now().toUtc())));
+      // La gracia offline cuenta desde la última vez que el servidor confirmó
+      // la sesión, no desde el último login con contraseña. Antes sólo se
+      // fijaba al iniciar sesión: a los siete días el aviso «caduca hoy»
+      // aparecía con red perfecta y ventas subiendo, y se quedaba pegado.
+      // Renovarla aquí es seguro: push y pull son autenticados, así que un
+      // usuario desactivado o revocado nunca llega a esta línea.
+      final diasGracia = int.tryParse(await _sync.config('offline_grace_days') ?? '') ??
+          AppConfig.diasGraciaOffline;
+      final ahora = DateTime.now().toUtc();
+      await (_db.update(_db.estadoApp)..where((t) => t.id.equals(1))).write(
+        EstadoAppCompanion(
+          ultimoSyncExitoso: Value(ahora),
+          offlineValidoHasta: Value(ahora.add(Duration(days: diasGracia))),
+        ),
+      );
     } on ApiException catch (e) {
       error = e.mensajeUsuario;
       if (e.esDeRed) await _conectividad.verificar();
