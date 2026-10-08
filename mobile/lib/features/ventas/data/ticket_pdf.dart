@@ -51,6 +51,7 @@ class TicketPdf {
                 style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
               ),
             ),
+            if (negocio.sede != null) pw.Center(child: pw.Text(negocio.sede!, style: _pequeno)),
             if (nit != null) pw.Center(child: pw.Text('NIT $nit', style: _pequeno)),
             if (direccion != null) pw.Center(child: pw.Text(direccion, style: _pequeno)),
             if (telefono != null) pw.Center(child: pw.Text(telefono, style: _pequeno)),

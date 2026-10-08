@@ -768,6 +768,41 @@ class SyncDao {
     });
   }
 
+  /// Comprueba que la sede activa del teléfono siga siendo una de las de quien
+  /// tiene la sesión, y si no, pasa a la primera suya.
+  ///
+  /// Ocurre cuando un gerente acepta el cambio de sede de un empleado: tras la
+  /// bajada, su usuario trae la sede nueva pero el teléfono seguía en la vieja,
+  /// y lo que vendiera quedaría en una sede que ya no es la suya (el servidor
+  /// lo rechazaría por estar fuera de su alcance).
+  ///
+  /// Devuelve la sede a la que cambió, o null si no hizo falta.
+  Future<String?> asegurarSedeActiva() async {
+    final estado = await (db.select(db.estadoApp)..where((t) => t.id.equals(1))).getSingleOrNull();
+    if (estado?.usuarioUuid == null) return null;
+    final usuario =
+        await (db.select(db.usuarios)..where((t) => t.uuid.equals(estado!.usuarioUuid!))).getSingleOrNull();
+    if (usuario == null) return null;
+
+    final activas = await (db.select(db.sedes)
+          ..where((t) => t.deletedAt.isNull() & t.activo.equals(true))
+          ..orderBy([(t) => OrderingTerm.desc(t.esPrincipal), (t) => OrderingTerm.asc(t.nombre)]))
+        .get();
+    final suyas = usuario.rol == 'ADMIN'
+        ? activas.map((s) => s.uuid).toList()
+        : [
+            for (final s in activas)
+              if (usuario.sedes.split(',').contains(s.uuid)) s.uuid,
+          ];
+    if (suyas.isEmpty || suyas.contains(estado!.sedeActivaUuid)) return null;
+
+    final nueva = suyas.first;
+    await (db.update(db.estadoApp)..where((t) => t.id.equals(1)))
+        .write(EstadoAppCompanion(sedeActivaUuid: Value(nueva)));
+    await proyectarSedeActiva(nueva);
+    return nueva;
+  }
+
   /// Rehace la proyección del stock en `productos` para la sede activa, desde
   /// `stock_sedes`. Se usa al cambiar de sede activa.
   Future<void> proyectarSedeActiva(String sedeUuid) async {

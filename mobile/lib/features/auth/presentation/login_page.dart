@@ -33,6 +33,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   bool _enviando = false;
   String? _error;
 
+  /// Por qué se cerró la sesión anterior, si la cerró la app y no el usuario:
+  /// cuenta inhabilitada, fin del turno… Sin esto, el empleado sólo vería que
+  /// «la app lo sacó» y nadie sabría explicarle por qué.
+  String? _motivoCierre;
+
   @override
   void initState() {
     super.initState();
@@ -40,6 +45,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // persona y volver a teclearlo cada mañana es fricción pura.
     ref.read(authRepositoryProvider).ultimoEmail().then((email) {
       if (email != null && mounted) _email.text = email;
+    });
+    ref.read(authRepositoryProvider).tomarMotivoCierre().then((motivo) {
+      if (motivo != null && mounted) setState(() => _motivoCierre = motivo);
     });
   }
 
@@ -152,6 +160,29 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   children: [
                     const _Marca(),
                     const SizedBox(height: 40),
+                    if (_motivoCierre != null) ...[
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: context.dominio.advertenciaContenedor,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.info_outline_rounded, size: 20, color: context.dominio.advertencia),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                _motivoCierre!,
+                                style: context.textos.bodySmall?.copyWith(color: context.dominio.advertencia),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ).animate().fadeIn(duration: 220.ms),
+                      const SizedBox(height: 20),
+                    ],
                     TextFormField(
                       controller: _email,
                       keyboardType: TextInputType.emailAddress,

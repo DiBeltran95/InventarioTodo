@@ -432,6 +432,10 @@ class SyncEngine extends ChangeNotifier {
       if (datos['hay_mas'] != true || aplicadas == 0) break;
     }
 
+    // Si a esta persona la cambiaron de sede, su fila de usuario acaba de bajar
+    // con la sede nueva: el teléfono pasa a operar allí.
+    await _sync.asegurarSedeActiva();
+
     return total;
   }
 

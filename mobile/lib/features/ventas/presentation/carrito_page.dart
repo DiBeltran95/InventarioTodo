@@ -133,6 +133,9 @@ class CarritoPage extends ConsumerWidget {
 
     final notifier = ref.read(carritoProvider.notifier);
     notifier.fijarMetodoPago(pago.metodoLegado);
+    if (pago.clienteNombre != null || pago.clienteDocumento != null) {
+      notifier.fijarCliente(nombre: pago.clienteNombre, documento: pago.clienteDocumento);
+    }
 
     late VentaCompleta venta;
     try {

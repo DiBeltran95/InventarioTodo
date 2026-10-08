@@ -3,11 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/database/daos/metodos_pago_dao.dart';
+import '../../../core/money/money.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/providers/providers.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/motion.dart';
 import '../../../core/widgets/estados.dart';
+import '../../auth/presentation/auth_providers.dart';
 import '../../categorias/presentation/widgets/formulario_categoria.dart' show colorDesdeHex;
 import 'widgets/formulario_metodo_pago.dart';
 
@@ -26,6 +28,7 @@ class MetodosPagoPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final metodos = ref.watch(metodosPagoTodosProvider);
     final permiteCredito = ref.watch(permiteCreditoProvider);
+    final sedes = ref.watch(indiceSedesProvider).value ?? const {};
 
     return Scaffold(
       appBar: AppBar(title: const Text('Medios de pago')),
@@ -57,6 +60,7 @@ class MetodosPagoPage extends ConsumerWidget {
                     padding: const EdgeInsets.only(bottom: 10),
                     child: _FilaMetodo(
                       item: lista[i],
+                      sede: sedes[lista[i].metodo.sedeUuid]?.nombre,
                       onEditar: () => abrirFormularioMetodo(context, metodo: lista[i].metodo),
                       onEliminar: () => _confirmarEliminar(context, ref, lista[i]),
                     ),
@@ -124,10 +128,13 @@ class _InterruptorFiado extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Es configuración del negocio: la cambia el Director General (el
+    // servidor rechaza a cualquier otro). El gerente ve cómo está.
+    final esDirector = ref.watch(esDirectorProvider);
     return Card(
       child: SwitchListTile(
         value: activo,
-        onChanged: (valor) async {
+        onChanged: !esDirector ? null : (valor) async {
           // La configuración del negocio NO viaja por la cola de salida: la
           // escribe el administrador contra la API y baja a todos los
           // dispositivos en el pull. Por eso esto exige conexión.
@@ -145,8 +152,8 @@ class _InterruptorFiado extends ConsumerWidget {
               mostrarMensaje(
                 context,
                 valor
-                    ? 'El negocio ahora permite fiar'
-                    : 'Fiado desactivado',
+                    ? 'Ya se puede cobrar con entidades de crédito'
+                    : 'Créditos con entidades desactivados',
                 esExito: true,
               );
             }
@@ -163,10 +170,10 @@ class _InterruptorFiado extends ConsumerWidget {
           }
         },
         secondary: const Icon(Icons.schedule_rounded),
-        title: const Text('Permitir fiado'),
+        title: const Text('Cobrar con entidades de crédito'),
         subtitle: Text(
           activo
-              ? 'Se puede dejar una venta como saldo pendiente del cliente'
+              ? 'Addi, Crediya… aparecen al cobrar; lo que deben queda en Cuentas por cobrar'
               : 'Las ventas se cobran completas en el momento',
           style: context.textos.bodySmall,
         ),
@@ -180,9 +187,13 @@ class _FilaMetodo extends StatelessWidget {
     required this.item,
     required this.onEditar,
     required this.onEliminar,
+    this.sede,
   });
 
   final MetodoPagoConUso item;
+
+  /// Nombre de la sede si es un medio propio de una sede; null = todas.
+  final String? sede;
   final VoidCallback onEditar;
   final VoidCallback onEliminar;
 
@@ -221,6 +232,9 @@ class _FilaMetodo extends StatelessWidget {
         subtitle: Text(
           [
             _etiquetaTipo(m.tipo),
+            sede ?? 'todas las sedes',
+            if (m.comisionPct != null) 'comisión ${TasaIva(m.comisionPct!).format()}',
+            if (m.diasPago != null) 'paga en ${m.diasPago} d',
             if (m.requiereReferencia) 'pide referencia',
             if (item.cobros > 0) '${item.cobros} cobros',
           ].join(' · '),

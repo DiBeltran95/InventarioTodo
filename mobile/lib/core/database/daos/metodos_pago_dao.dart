@@ -67,8 +67,9 @@ class MetodosPagoDao {
     ),
     (
       codigo: 'CREDITO',
-      etiqueta: 'Fiado',
-      ayuda: 'No entra dinero ahora: queda como saldo pendiente del cliente',
+      etiqueta: 'Crédito con entidad',
+      ayuda: 'Addi, Crediya, Sistecrédito… la entidad le paga al negocio después, '
+          'descontando su comisión',
     ),
     (codigo: 'OTRO', etiqueta: 'Otro', ayuda: 'Bonos, vales, cualquier otro medio'),
   ];

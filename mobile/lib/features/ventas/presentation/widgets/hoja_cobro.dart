@@ -12,9 +12,15 @@ import 'qr_cobro.dart';
 
 /// Resultado del cobro: el desglose de con qué se pagó.
 class ResultadoCobro {
-  const ResultadoCobro({required this.pagos});
+  const ResultadoCobro({required this.pagos, this.clienteNombre, this.clienteDocumento});
 
   final List<PagoDeVenta> pagos;
+
+  /// A quién se le vendió. Obligatorio cuando parte del pago es con una
+  /// entidad de crédito (Addi, Crediya…): la cuenta por cobrar es contra la
+  /// entidad, pero para reclamarle hay que poder decirle qué cliente fue.
+  final String? clienteNombre;
+  final String? clienteDocumento;
 
   bool get esMixto => pagos.length > 1;
 
@@ -65,6 +71,8 @@ class _HojaCobroState extends ConsumerState<HojaCobro> {
 
   final _monto = TextEditingController();
   final _referencia = TextEditingController();
+  final _clienteNombre = TextEditingController();
+  final _clienteDocumento = TextEditingController();
 
   MetodoPago? _metodo;
   bool _cobrando = false;
@@ -73,6 +81,8 @@ class _HojaCobroState extends ConsumerState<HojaCobro> {
   void dispose() {
     _monto.dispose();
     _referencia.dispose();
+    _clienteNombre.dispose();
+    _clienteDocumento.dispose();
     super.dispose();
   }
 
@@ -116,7 +126,12 @@ class _HojaCobroState extends ConsumerState<HojaCobro> {
     final m = _metodo;
     if (m == null || _cobrando) return false;
     if (_aplicado.esCero || _aplicado.esNegativo) return false;
-    if (m.requiereReferencia && _referencia.text.trim().isEmpty) return false;
+    // Con una entidad de crédito, el número de aprobación y los datos del
+    // cliente son lo único que permite cobrarle después a la entidad.
+    if ((m.requiereReferencia || m.esCredito) && _referencia.text.trim().isEmpty) return false;
+    if (m.esCredito && (_clienteNombre.text.trim().length < 2 || _clienteDocumento.text.trim().length < 3)) {
+      return false;
+    }
     // Nunca se puede aplicar más de lo que falta: eso descuadraría la venta.
     return _aplicado <= _pendiente;
   }
@@ -155,7 +170,17 @@ class _HojaCobroState extends ConsumerState<HojaCobro> {
   void _confirmar() {
     if (!_cuadra) return;
     setState(() => _cobrando = true);
-    Navigator.pop(context, ResultadoCobro(pagos: List.unmodifiable(_pagos)));
+    final conCredito = _pagos.any((p) => p.metodoTipo == 'CREDITO');
+    final nombre = _clienteNombre.text.trim();
+    final documento = _clienteDocumento.text.trim();
+    Navigator.pop(
+      context,
+      ResultadoCobro(
+        pagos: List.unmodifiable(_pagos),
+        clienteNombre: conCredito && nombre.isNotEmpty ? nombre : null,
+        clienteDocumento: conCredito && documento.isNotEmpty ? documento : null,
+      ),
+    );
   }
 
   Future<void> _mostrarQr(MetodoPago metodo) {
@@ -236,6 +261,8 @@ class _HojaCobroState extends ConsumerState<HojaCobro> {
                             metodo: _metodo!,
                             monto: _monto,
                             referencia: _referencia,
+                            clienteNombre: _clienteNombre,
+                            clienteDocumento: _clienteDocumento,
                             pendiente: _pendiente,
                             cambio: _cambio,
                             onCambio: () => setState(() {}),
@@ -443,6 +470,8 @@ class _CamposDelPago extends StatelessWidget {
     required this.metodo,
     required this.monto,
     required this.referencia,
+    required this.clienteNombre,
+    required this.clienteDocumento,
     required this.pendiente,
     required this.cambio,
     required this.onCambio,
@@ -452,6 +481,8 @@ class _CamposDelPago extends StatelessWidget {
   final MetodoPago metodo;
   final TextEditingController monto;
   final TextEditingController referencia;
+  final TextEditingController clienteNombre;
+  final TextEditingController clienteDocumento;
   final Money pendiente;
   final Money cambio;
   final VoidCallback onCambio;
@@ -529,16 +560,47 @@ class _CamposDelPago extends StatelessWidget {
           ),
         ],
 
-        if (metodo.requiereReferencia) ...[
+        if (metodo.esCredito) ...[
+          const SizedBox(height: 10),
+          Text(
+            '${metodo.nombre} le paga al negocio después. Estos datos son los que '
+            'permiten reclamarle cada venta.',
+            style: context.textos.bodySmall?.copyWith(color: context.colores.onSurfaceVariant),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: clienteNombre,
+            onChanged: (_) => onCambio(),
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Nombre del cliente *',
+              prefixIcon: Icon(Icons.person_outline_rounded),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: clienteDocumento,
+            onChanged: (_) => onCambio(),
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Documento del cliente *',
+              prefixIcon: Icon(Icons.badge_outlined),
+            ),
+          ),
+        ],
+
+        if (metodo.requiereReferencia || metodo.esCredito) ...[
           const SizedBox(height: 10),
           TextField(
             controller: referencia,
             onChanged: (_) => onCambio(),
             textCapitalization: TextCapitalization.characters,
-            decoration: const InputDecoration(
-              labelText: 'Referencia *',
-              helperText: 'Aprobación del datáfono o número de la transferencia',
-              prefixIcon: Icon(Icons.tag_rounded),
+            decoration: InputDecoration(
+              labelText: metodo.esCredito ? 'Número de aprobación *' : 'Referencia *',
+              helperText: metodo.esCredito
+                  ? 'El que da ${metodo.nombre} al aprobar el crédito'
+                  : 'Aprobación del datáfono o número de la transferencia',
+              prefixIcon: const Icon(Icons.tag_rounded),
             ),
           ),
         ],

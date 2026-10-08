@@ -60,6 +60,8 @@ class ReportesPage extends ConsumerWidget {
             ),
             const SizedBox(height: 20),
 
+            _VentasPorSede(verMargen: esAdmin),
+
             _Seccion(
               titulo: 'Más vendidos',
               accion: TextButton(
@@ -654,6 +656,69 @@ class _ResumenMovimientos extends ConsumerWidget {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Cuánto vendió cada sede en el periodo, con su peso sobre el total. Con una
+/// sola sede no aparece: repetiría las tarjetas de arriba.
+class _VentasPorSede extends ConsumerWidget {
+  const _VentasPorSede({required this.verMargen});
+
+  final bool verMargen;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filas = ref.watch(ventasPorSedeReporteProvider).value ?? const [];
+    if (filas.length < 2) return const SizedBox.shrink();
+    final total = Money.sumar(filas.map((f) => f.total));
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: _Seccion(
+        titulo: 'Ventas por sede',
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(
+              children: [
+                for (final f in filas)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(child: Text(f.sede.nombre, style: context.textos.titleSmall)),
+                            Text(f.total.format(), style: context.textos.titleSmall),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: total.esCero ? 0 : f.total.centavos / total.centavos,
+                            minHeight: 6,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          [
+                            '${f.numero} venta${f.numero == 1 ? '' : 's'}',
+                            if (!total.esCero) '${(f.total.centavos / total.centavos * 100).toStringAsFixed(0)} % del total',
+                            if (verMargen) 'margen ${f.margen.format()}',
+                          ].join(' · '),
+                          style: context.textos.bodySmall?.copyWith(color: context.colores.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );

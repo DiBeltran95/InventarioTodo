@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,11 +8,14 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/daos/metodos_pago_dao.dart';
+import '../../../../core/money/money.dart';
 import '../../../../core/providers/providers.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/encabezado_hoja.dart';
 import '../../../../core/widgets/estados.dart';
+import '../../../auth/presentation/auth_providers.dart';
 import '../../../categorias/presentation/widgets/formulario_categoria.dart' show colorDesdeHex;
+import '../../../sedes/presentation/sedes_providers.dart';
 import '../../data/imagen_qr.dart';
 
 /// Alta y edición de un medio de pago.
@@ -34,6 +38,14 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
   late final _nombre = TextEditingController(text: widget.metodo?.nombre ?? '');
   late final _instrucciones =
       TextEditingController(text: widget.metodo?.instrucciones ?? '');
+  late final _comision = TextEditingController(
+    text: widget.metodo?.comisionPct == null ? '' : TasaIva(widget.metodo!.comisionPct!).toApi().replaceAll('.00', ''),
+  );
+  late final _dias = TextEditingController(text: widget.metodo?.diasPago?.toString() ?? '');
+
+  /// Sede donde se puede usar; null = todas. Una sede con su propio Nequi o
+  /// datáfono tiene su medio; los comunes los define el director.
+  late String? _sede = widget.metodo == null ? _sedePorDefecto() : widget.metodo!.sedeUuid;
 
   late String _tipo = widget.metodo?.tipo ?? 'TRANSFERENCIA';
   late String _color = widget.metodo?.color ?? MetodosPagoDao.paleta.first;
@@ -48,10 +60,27 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
   /// El QR sólo tiene sentido donde el cliente paga desde su propio banco.
   bool get _admiteQr => _tipo == 'TRANSFERENCIA' || _tipo == 'OTRO';
 
+  /// El gerente no crea medios comunes: el suyo nace en su sede activa.
+  String? _sedePorDefecto() {
+    if (ref.read(esDirectorProvider)) return null;
+    return ref.read(sedeActivaProvider).value?.uuid;
+  }
+
+  /// Comisión tecleada como porcentaje («3,5») → escalada (350).
+  int? get _comisionEscalada {
+    final t = _comision.text.trim().replaceAll(',', '.');
+    if (t.isEmpty) return null;
+    final v = double.tryParse(t);
+    if (v == null) return null;
+    return TasaIva.parse(t).escalada;
+  }
+
   @override
   void dispose() {
     _nombre.dispose();
     _instrucciones.dispose();
+    _comision.dispose();
+    _dias.dispose();
     super.dispose();
   }
 
@@ -102,6 +131,9 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
         qr = await ImagenQr.persistir(qr, uuid ?? nombre) ?? qr;
       }
 
+      final credito = _tipo == 'CREDITO';
+      final comision = credito ? _comisionEscalada : null;
+      final dias = credito ? int.tryParse(_dias.text.trim()) : null;
       if (_esEdicion) {
         await dao.actualizar(
           uuid!,
@@ -112,6 +144,9 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
           instrucciones: _instrucciones.text,
           qrLocal: _admiteQr ? qr : null,
           activo: _activo,
+          sedeUuid: _sede == widget.metodo!.sedeUuid ? const Value.absent() : Value(_sede),
+          comisionPct: comision == widget.metodo!.comisionPct ? const Value.absent() : Value(comision),
+          diasPago: dias == widget.metodo!.diasPago ? const Value.absent() : Value(dias),
         );
       } else {
         await dao.crear(
@@ -121,6 +156,9 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
           requiereReferencia: _requiereReferencia,
           instrucciones: _instrucciones.text,
           qrLocal: _admiteQr ? qr : null,
+          sedeUuid: _sede,
+          comisionPct: comision,
+          diasPago: dias,
         );
       }
 
@@ -147,6 +185,11 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
 
   @override
   Widget build(BuildContext context) {
+    final esDirector = ref.watch(esDirectorProvider);
+    final sedes = ref.watch(misSedesProvider).value ?? const <Sede>[];
+    // Un medio común (de todas las sedes) sólo lo edita el director.
+    final soloLectura = _esEdicion && widget.metodo!.sedeUuid == null && !esDirector;
+
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SafeArea(
@@ -177,6 +220,29 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
                   validator: (v) =>
                       (v?.trim().length ?? 0) < 2 ? 'Escribe el nombre' : null,
                 ),
+                if (soloLectura) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Es un medio común a todas las sedes: lo edita el Director General.',
+                    style: context.textos.bodySmall?.copyWith(color: context.dominio.advertencia),
+                  ),
+                ],
+                if (sedes.length > 1 || esDirector) ...[
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String?>(
+                    initialValue: _sede,
+                    decoration: const InputDecoration(
+                      labelText: 'Disponible en',
+                      prefixIcon: Icon(Icons.storefront_outlined),
+                    ),
+                    items: [
+                      if (esDirector || _sede == null)
+                        const DropdownMenuItem(value: null, child: Text('Todas las sedes')),
+                      for (final s in sedes) DropdownMenuItem(value: s.uuid, child: Text(s.nombre)),
+                    ],
+                    onChanged: soloLectura ? null : (v) => setState(() => _sede = v),
+                  ),
+                ],
                 const SizedBox(height: 20),
 
                 Text('¿Cómo se comporta al cobrar?', style: context.textos.titleSmall),
@@ -197,6 +263,50 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
                     ],
                   ),
                 ),
+
+                if (_tipo == 'CREDITO') ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _comision,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'Comisión',
+                            suffixText: '%',
+                            helperText: 'La que descuenta al pagar',
+                          ),
+                          validator: (v) {
+                            final t = (v ?? '').trim().replaceAll(',', '.');
+                            if (t.isEmpty) return null;
+                            final n = double.tryParse(t);
+                            return n == null || n < 0 || n >= 100 ? 'Entre 0 y 99,99' : null;
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _dias,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Paga en',
+                            suffixText: 'días',
+                            helperText: 'Para avisar lo vencido',
+                          ),
+                          validator: (v) {
+                            final t = (v ?? '').trim();
+                            if (t.isEmpty) return null;
+                            final n = int.tryParse(t);
+                            return n == null || n < 0 || n > 365 ? 'Entre 0 y 365' : null;
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
 
                 if (_admiteQr) ...[
                   const SizedBox(height: 12),
@@ -261,7 +371,7 @@ class _FormularioMetodoPagoState extends ConsumerState<FormularioMetodoPago> {
 
                 const SizedBox(height: 24),
                 FilledButton.icon(
-                  onPressed: _guardando ? null : _guardar,
+                  onPressed: _guardando || soloLectura ? null : _guardar,
                   icon: _guardando
                       ? const SizedBox(
                           width: 18,

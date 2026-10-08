@@ -13,13 +13,19 @@ import '../../../core/widgets/estados.dart';
 import '../../../core/widgets/sync_chip.dart';
 import '../../auth/domain/sesion.dart';
 import '../../auth/presentation/auth_providers.dart';
+import 'dashboard_gestion.dart';
 import 'dashboard_providers.dart';
 
 /// Pantalla de inicio.
 ///
 /// Es un dashboard **de acciones**, no de vanidad: lo primero que se ve son
-/// Vender y Entrada, después las alertas de stock, y sólo al final los números.
-/// Quien abre esta app en un mostrador quiere despachar, no contemplar gráficas.
+/// Vender y Entrada, después lo que espera una decisión y las alertas de stock,
+/// y sólo al final los números. Quien abre esta app en un mostrador quiere
+/// despachar, no contemplar gráficas.
+///
+/// Cambia con el rol: el auxiliar de inventario no vende, así que su inicio
+/// gira en torno a recibir mercancía y a sus solicitudes de ajuste; el director
+/// ve además cada sede y los cambios de inventario del día.
 class DashboardPage extends ConsumerWidget {
   const DashboardPage({super.key});
 
@@ -27,7 +33,8 @@ class DashboardPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final sesion = ref.watch(sesionProvider).value;
     final resumen = ref.watch(resumenDashboardProvider);
-    final esAdmin = ref.watch(esGestorProvider);
+    final rol = ref.watch(rolProvider);
+    final esAdmin = rol.esGestor;
 
     return Scaffold(
       body: RefreshIndicator(
@@ -66,6 +73,8 @@ class DashboardPage extends ConsumerWidget {
               ],
             ),
 
+            const SliverToBoxAdapter(child: SelectorSedeActiva()),
+            const SliverToBoxAdapter(child: AvisoFinTurno()),
             const SliverToBoxAdapter(child: _AvisoCaducidad()),
 
             SliverPadding(
@@ -73,64 +82,99 @@ class DashboardPage extends ConsumerWidget {
               sliver: SliverToBoxAdapter(
                 child: Row(
                   children: [
-                    Expanded(
-                      child: _AccionPrincipal(
-                        icono: Icons.point_of_sale_rounded,
-                        titulo: 'Vender',
-                        subtitulo: 'Escanear y cobrar',
-                        color: context.colores.primary,
-                        alFrente: context.colores.onPrimary,
-                        onTap: () => context.push('${Rutas.escanear}?modo=venta'),
+                    if (!rol.puedeVender) ...[
+                      Expanded(
+                        child: _AccionPrincipal(
+                          icono: Icons.move_to_inbox_rounded,
+                          titulo: 'Entrada',
+                          subtitulo: 'Recibir mercancía',
+                          color: context.colores.primary,
+                          alFrente: context.colores.onPrimary,
+                          onTap: () => context.push('${Rutas.escanear}?modo=entrada'),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    // La segunda acción cambia con el rol. Al vendedor,
-                    // «Entrada» sólo le daría un rechazo del enrutador: cargar
-                    // mercancía es de administración. Lo que sí necesita a mano
-                    // es consultar el catálogo —precio y existencias— porque su
-                    // barra inferior ya no lleva esa pestaña.
-                    Expanded(
-                      child: esAdmin
-                          ? _AccionPrincipal(
-                              icono: Icons.move_to_inbox_rounded,
-                              titulo: 'Entrada',
-                              subtitulo: 'Recibir mercancía',
-                              color: context.colores.secondaryContainer,
-                              alFrente: context.colores.onSecondaryContainer,
-                              onTap: () => context.push('${Rutas.escanear}?modo=entrada'),
-                            )
-                          : _AccionPrincipal(
-                              icono: Icons.inventory_2_rounded,
-                              titulo: 'Productos',
-                              subtitulo: 'Precios y existencias',
-                              color: context.colores.secondaryContainer,
-                              alFrente: context.colores.onSecondaryContainer,
-                              onTap: () => context.go(Rutas.productos),
-                            ),
-                    ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _AccionPrincipal(
+                          icono: Icons.fact_check_outlined,
+                          titulo: 'Ajustes',
+                          subtitulo: 'Conteos y mermas',
+                          color: context.colores.secondaryContainer,
+                          alFrente: context.colores.onSecondaryContainer,
+                          onTap: () => context.push(Rutas.solicitudesAjuste),
+                        ),
+                      ),
+                    ] else ...[
+                      Expanded(
+                        child: _AccionPrincipal(
+                          icono: Icons.point_of_sale_rounded,
+                          titulo: 'Vender',
+                          subtitulo: 'Escanear y cobrar',
+                          color: context.colores.primary,
+                          alFrente: context.colores.onPrimary,
+                          onTap: () => context.push('${Rutas.escanear}?modo=venta'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // La segunda acción cambia con el rol. Al vendedor,
+                      // «Entrada» sólo le daría un rechazo del enrutador: cargar
+                      // mercancía es de administración. Lo que sí necesita a mano
+                      // es consultar el catálogo —precio y existencias— porque su
+                      // barra inferior ya no lleva esa pestaña.
+                      Expanded(
+                        child: esAdmin
+                            ? _AccionPrincipal(
+                                icono: Icons.move_to_inbox_rounded,
+                                titulo: 'Entrada',
+                                subtitulo: 'Recibir mercancía',
+                                color: context.colores.secondaryContainer,
+                                alFrente: context.colores.onSecondaryContainer,
+                                onTap: () => context.push('${Rutas.escanear}?modo=entrada'),
+                              )
+                            : _AccionPrincipal(
+                                icono: Icons.inventory_2_rounded,
+                                titulo: 'Productos',
+                                subtitulo: 'Precios y existencias',
+                                color: context.colores.secondaryContainer,
+                                alFrente: context.colores.onSecondaryContainer,
+                                onTap: () => context.go(Rutas.productos),
+                              ),
+                      ),
+                    ],
                   ],
                 ).animate().fadeIn(duration: 300.ms).slideY(begin: 0.08, curve: Curves.easeOutCubic),
               ),
             ),
 
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-              sliver: SliverToBoxAdapter(
-                child: resumen.when(
-                  loading: () => const SkeletonBloque(alto: 150),
-                  error: (e, _) => EstadoError(mensaje: '$e'),
-                  data: (r) => _TarjetaHoy(resumen: r),
+            const SliverToBoxAdapter(child: TarjetaCaja()),
+
+            if (rol.puedeVender)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+                sliver: SliverToBoxAdapter(
+                  child: resumen.when(
+                    loading: () => const SkeletonBloque(alto: 150),
+                    error: (e, _) => EstadoError(mensaje: '$e'),
+                    data: (r) => _TarjetaHoy(resumen: r),
+                  ),
                 ),
               ),
-            ),
 
-            const SliverToBoxAdapter(child: _SeccionAlertas()),
+            const SliverToBoxAdapter(child: TarjetaPorResolver()),
+            if (esAdmin) const SliverToBoxAdapter(child: TarjetaVentasPorSede()),
+
+            // El vendedor ve lo que se acaba en su sede; quien gestiona o
+            // repone, el resumen por sede que lleva a las acciones.
+            SliverToBoxAdapter(
+              child: rol.puedeRegistrarEntradas ? const TarjetaStockBajoSedes() : const _SeccionAlertas(),
+            ),
+            if (rol.esDirector) const SliverToBoxAdapter(child: TarjetaCambiosInventario()),
 
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
               sliver: SliverToBoxAdapter(
                 child: resumen.maybeWhen(
-                  data: (r) => _RejillaIndicadores(resumen: r, verCostos: esAdmin),
+                  data: (r) => _RejillaIndicadores(resumen: r, verCostos: esAdmin, verVentas: rol.puedeVender),
                   orElse: () => const SkeletonBloque(alto: 180),
                 ),
               ),
@@ -139,7 +183,7 @@ class DashboardPage extends ConsumerWidget {
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
               sliver: SliverToBoxAdapter(
-                child: _AccesosRapidos(esAdmin: esAdmin),
+                child: _AccesosRapidos(rol: rol),
               ),
             ),
 
@@ -441,7 +485,7 @@ class _SeccionAlertas extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final bajos = ref.watch(stockBajoProvider).value ?? const [];
     if (bajos.isEmpty) return const SizedBox.shrink();
-    final esAdmin = ref.watch(esGestorProvider);
+    final esAdmin = ref.watch(rolProvider).puedeRegistrarEntradas;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
@@ -514,24 +558,29 @@ class _SeccionAlertas extends ConsumerWidget {
 // ─── Indicadores ────────────────────────────────────────────────────────────
 
 class _RejillaIndicadores extends StatelessWidget {
-  const _RejillaIndicadores({required this.resumen, required this.verCostos});
+  const _RejillaIndicadores({required this.resumen, required this.verCostos, this.verVentas = true});
 
   final ResumenDashboard resumen;
   final bool verCostos;
 
+  /// false = auxiliar de inventario: no vende, y las ventas no son su trabajo.
+  final bool verVentas;
+
   @override
   Widget build(BuildContext context) {
     final tarjetas = <Widget>[
-      _Indicador(
-        icono: Icons.calendar_view_week_rounded,
-        etiqueta: 'Últimos 7 días',
-        valor: resumen.ventasSemana.format(),
-      ),
-      _Indicador(
-        icono: Icons.calendar_month_rounded,
-        etiqueta: 'Últimos 30 días',
-        valor: resumen.ventasMes.format(),
-      ),
+      if (verVentas)
+        _Indicador(
+          icono: Icons.calendar_view_week_rounded,
+          etiqueta: 'Últimos 7 días',
+          valor: resumen.ventasSemana.format(),
+        ),
+      if (verVentas)
+        _Indicador(
+          icono: Icons.calendar_month_rounded,
+          etiqueta: 'Últimos 30 días',
+          valor: resumen.ventasMes.format(),
+        ),
       _Indicador(
         icono: Icons.inventory_2_outlined,
         etiqueta: 'Productos activos',
@@ -630,52 +679,47 @@ class _Indicador extends StatelessWidget {
 // ─── Accesos rápidos ────────────────────────────────────────────────────────
 
 class _AccesosRapidos extends StatelessWidget {
-  const _AccesosRapidos({required this.esAdmin});
+  const _AccesosRapidos({required this.rol});
 
-  final bool esAdmin;
+  final RolUsuario rol;
 
   @override
   Widget build(BuildContext context) {
     // Un acceso directo que el enrutador va a rechazar es peor que no tenerlo:
     // el usuario toca, la pantalla parpadea y vuelve al inicio sin explicación.
-    // Por eso «Movimientos» y «Nuevo producto» sólo existen para el
-    // administrador, que es quien puede entrar.
+    // Por eso cada rol ve sólo los que puede abrir (las mismas reglas que
+    // `puedeAbrir`).
+    ListTile acceso(IconData icono, String titulo, String ruta, {String? subtitulo, bool ir = false}) => ListTile(
+          leading: Icon(icono),
+          title: Text(titulo),
+          subtitle: subtitulo == null ? null : Text(subtitulo),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => ir ? context.go(ruta) : context.push(ruta),
+        );
+
+    final accesos = <Widget>[
+      acceso(Icons.qr_code_scanner_rounded, 'Consultar un producto', '${Rutas.escanear}?modo=consulta',
+          subtitulo: 'Escanear para ver precio y existencias'),
+      if (rol.puedeVender && !rol.esGestor) acceso(Icons.receipt_long_outlined, 'Mis ventas de hoy', Rutas.ventas, ir: true),
+      if (rol.puedeVender) acceso(Icons.point_of_sale_rounded, 'Mi caja', Rutas.caja),
+      if (rol.puedeRegistrarEntradas) acceso(Icons.swap_vert_rounded, 'Movimientos de inventario', Rutas.movimientos),
+      if (rol.pideTraslados) acceso(Icons.local_shipping_outlined, 'Traslados entre sedes', Rutas.traslados),
+      if (rol.puedeRegistrarEntradas) acceso(Icons.warning_amber_rounded, 'Stock bajo por sede', Rutas.stockBajo),
+      if (rol.esGestor) ...[
+        acceso(Icons.fact_check_outlined, 'Ajustes de inventario', Rutas.solicitudesAjuste),
+        acceso(Icons.fact_check_outlined, 'Cierres de caja', Rutas.cierres),
+        acceso(Icons.account_balance_outlined, 'Cuentas por cobrar', Rutas.cuentasPorCobrar,
+            subtitulo: 'Lo que deben Addi, Crediya y demás entidades'),
+        acceso(Icons.add_box_outlined, 'Nuevo producto', Rutas.productoNuevo),
+      ],
+    ];
+
     return Card(
       child: Column(
         children: [
-          if (esAdmin) ...[
-            ListTile(
-              leading: const Icon(Icons.swap_vert_rounded),
-              title: const Text('Movimientos de inventario'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => context.push(Rutas.movimientos),
-            ),
-            const Divider(height: 1, indent: 16, endIndent: 16),
-          ],
-          ListTile(
-            leading: const Icon(Icons.qr_code_scanner_rounded),
-            title: const Text('Consultar un producto'),
-            subtitle: const Text('Escanear para ver precio y existencias'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => context.push('${Rutas.escanear}?modo=consulta'),
-          ),
-          if (!esAdmin) ...[
-            const Divider(height: 1, indent: 16, endIndent: 16),
-            ListTile(
-              leading: const Icon(Icons.receipt_long_outlined),
-              title: const Text('Mis ventas de hoy'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => context.go(Rutas.ventas),
-            ),
-          ],
-          if (esAdmin) ...[
-            const Divider(height: 1, indent: 16, endIndent: 16),
-            ListTile(
-              leading: const Icon(Icons.add_box_outlined),
-              title: const Text('Nuevo producto'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => context.push(Rutas.productoNuevo),
-            ),
+          for (var i = 0; i < accesos.length; i++) ...[
+            if (i > 0) const Divider(height: 1, indent: 16, endIndent: 16),
+            accesos[i],
           ],
         ],
       ),

@@ -25,7 +25,7 @@ class VistaTicketPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final negocio = ref.watch(datosNegocioProvider);
+    final negocio = ref.watch(datosTicketProvider(venta.venta.sedeUuid));
 
     return Scaffold(
       appBar: AppBar(

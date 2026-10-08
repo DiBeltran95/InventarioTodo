@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/database/app_database.dart';
 import '../../../core/database/daos/reportes_dao.dart';
 import '../../../core/money/money.dart';
 import '../../../core/providers/providers.dart';
@@ -92,4 +93,11 @@ final resumenMovimientosProvider =
         desde: periodo.desde,
         hasta: Fechas.hoy(),
       );
+});
+
+/// Ventas del periodo por sede (sólo tiene sentido con dos o más).
+final ventasPorSedeReporteProvider =
+    StreamProvider<List<({Sede sede, Money total, int numero, Money margen})>>((ref) {
+  final periodo = ref.watch(periodoReporteProvider);
+  return ref.watch(sedesDaoProvider).observarTotalesPorSede(desde: periodo.desde);
 });

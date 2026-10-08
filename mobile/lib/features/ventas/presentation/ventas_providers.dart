@@ -30,7 +30,7 @@ enum RangoVentas {
 }
 
 class FiltroVentas {
-  const FiltroVentas({this.rango = RangoVentas.hoy, this.dia, this.busqueda = ''});
+  const FiltroVentas({this.rango = RangoVentas.hoy, this.dia, this.busqueda = '', this.sede});
 
   final RangoVentas rango;
 
@@ -41,6 +41,9 @@ class FiltroVentas {
 
   final String busqueda;
 
+  /// Sede a mostrar; null = todas las del usuario.
+  final String? sede;
+
   String get diaEfectivo => dia ?? Fechas.hoy();
   bool get esHoy => diaEfectivo == Fechas.hoy();
 
@@ -49,6 +52,7 @@ class FiltroVentas {
         rango: rango ?? this.rango,
         dia: dia ?? this.dia,
         busqueda: busqueda ?? this.busqueda,
+        sede: sede,
       );
 }
 
@@ -57,6 +61,10 @@ class FiltroVentasNotifier extends Notifier<FiltroVentas> {
   FiltroVentas build() => const FiltroVentas();
 
   void porRango(RangoVentas rango) => state = state.copyWith(rango: rango);
+
+  /// null = todas las sedes.
+  void porSede(String? sede) =>
+      state = FiltroVentas(rango: state.rango, dia: state.dia, busqueda: state.busqueda, sede: sede);
   void buscar(String texto) => state = state.copyWith(busqueda: texto);
 
   void porDia(String dia) => state = state.copyWith(dia: dia);
@@ -90,6 +98,7 @@ final ventasProvider = StreamProvider<List<Venta>>((ref) {
     return dao.observarVentas(
       desde: filtro.rango.desde,
       busqueda: filtro.busqueda,
+      sedes: filtro.sede == null ? null : [filtro.sede!],
       // Se incluyen las anuladas para que el historial no mienta: una venta
       // que existió y se anuló debe seguir siendo visible.
       estado: null,

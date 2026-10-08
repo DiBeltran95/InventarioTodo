@@ -40,7 +40,7 @@ class VentaExitosa extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final cambio = venta.cambio;
     final hayCambio = cambio.esPositivo;
-    final negocio = ref.watch(datosNegocioProvider);
+    final negocio = ref.watch(datosTicketProvider(venta.venta.sedeUuid));
 
     return Scaffold(
       body: SafeArea(

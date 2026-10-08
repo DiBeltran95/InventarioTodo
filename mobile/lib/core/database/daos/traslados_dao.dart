@@ -200,6 +200,23 @@ class TrasladosDao {
       final detalles =
           await (db.select(db.trasladoDetalles)..where((d) => d.trasladoUuid.equals(trasladoUuid))).get();
 
+      bool ve(String s) => q.sedes == null || q.sedes!.contains(s);
+
+      // La misma regla que el servidor (TRASLADO_SIN_STOCK): no se despacha lo
+      // que no hay. Comprobarlo aquí evita aplicar en el teléfono un traslado
+      // que el servidor va a rechazar y dejar el stock local descuadrado.
+      if (ve(t.sedeOrigenUuid)) {
+        for (final d in detalles.where((d) => d.productoUuid != null)) {
+          final disponible = await inventario.stockEnSede(d.productoUuid!, t.sedeOrigenUuid);
+          if (disponible < d.cantidad) {
+            throw StateError(
+              'No hay suficiente ${d.descripcion} en ${origen?.nombre ?? 'la sede de origen'}: '
+              'hay ${Cantidad(disponible).format()} y el traslado pide ${Cantidad(d.cantidad).format()}',
+            );
+          }
+        }
+      }
+
       final movimientos = <Map<String, dynamic>>[];
       for (final d in detalles) {
         final salida = _uuid.v7();
@@ -207,7 +224,6 @@ class TrasladosDao {
         movimientos.add({'detalle_uuid': d.uuid, 'salida_uuid': salida, 'entrada_uuid': entrada});
         if (d.productoUuid == null) continue;
 
-        bool ve(String s) => q.sedes == null || q.sedes!.contains(s);
         if (ve(t.sedeOrigenUuid)) {
           await inventario.aplicarMovimientoDeTraslado(
             productoUuid: d.productoUuid!,

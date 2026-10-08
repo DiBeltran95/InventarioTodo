@@ -14,6 +14,7 @@ import '../../../core/providers/providers.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/foto_producto.dart';
+import '../../auth/presentation/auth_providers.dart';
 import '../../ventas/presentation/carrito_provider.dart';
 import '../domain/modo_escaner.dart';
 import 'marco_escaner.dart';
@@ -328,7 +329,11 @@ class _ScannerPageState extends ConsumerState<ScannerPage>
                       resultado: _resultado!,
                       modo: widget.modo,
                       onDeshacer: esVenta ? _deshacer : null,
-                      onCrear: () => _crearProductoCon(_resultado!.codigo),
+                      // Crear productos es de quien edita el catálogo: al
+                      // vendedor o al auxiliar el router se lo rechazaría.
+                      onCrear: ref.watch(rolProvider).puedeEditarCatalogo
+                          ? () => _crearProductoCon(_resultado!.codigo)
+                          : null,
                       onCerrar: () {
                         _temporizadorResultado?.cancel();
                         setState(() => _resultado = null);
@@ -442,7 +447,9 @@ class _TarjetaResultado extends StatelessWidget {
 
   final _Resultado resultado;
   final ModoEscaner modo;
-  final VoidCallback onCrear;
+
+  /// null = quien escanea no puede crear productos.
+  final VoidCallback? onCrear;
   final VoidCallback onCerrar;
   final VoidCallback? onDeshacer;
 
@@ -612,13 +619,15 @@ class _TarjetaResultado extends StatelessWidget {
                 child: const Text('Reintentar'),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton(
-                onPressed: onCrear,
-                child: const Text('Crear producto'),
+            if (onCrear != null) ...[
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: onCrear,
+                  child: const Text('Crear producto'),
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ],

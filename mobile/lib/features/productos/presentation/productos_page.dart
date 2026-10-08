@@ -215,7 +215,9 @@ class _ProductosPageState extends ConsumerState<ProductosPage> {
             // administración. Al vendedor le rebotarían contra el enrutador,
             // y un atajo que parpadea y devuelve al inicio confunde más que
             // no estar.
-            if (esAdmin) ...[
+            // El auxiliar de inventario también recibe mercancía y consulta el
+            // kardex; editar el producto sigue siendo de gestión.
+            if (ref.read(rolProvider).puedeRegistrarEntradas) ...[
               ListTile(
                 leading: const Icon(Icons.move_to_inbox_rounded),
                 title: const Text('Registrar entrada'),
@@ -232,14 +234,15 @@ class _ProductosPageState extends ConsumerState<ProductosPage> {
                   context.push('${Rutas.movimientos}?producto=${item.uuid}');
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: const Text('Editar'),
-                onTap: () {
-                  Navigator.pop(hoja);
-                  context.push(Rutas.productoEditar(item.uuid));
-                },
-              ),
+              if (esAdmin)
+                ListTile(
+                  leading: const Icon(Icons.edit_outlined),
+                  title: const Text('Editar'),
+                  onTap: () {
+                    Navigator.pop(hoja);
+                    context.push(Rutas.productoEditar(item.uuid));
+                  },
+                ),
             ],
           ],
         ),

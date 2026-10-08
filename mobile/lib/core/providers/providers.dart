@@ -196,6 +196,17 @@ final datosNegocioProvider = Provider<DatosNegocio>((ref) {
       );
 });
 
+/// Datos del ticket de una venta: los del negocio con la dirección y el
+/// teléfono de la sede donde se vendió.
+final datosTicketProvider = Provider.family<DatosNegocio, String?>((ref, sedeUuid) {
+  final base = ref.watch(datosNegocioProvider);
+  if (sedeUuid == null) return base;
+  final sede = ref.watch(indiceSedesProvider).value?[sedeUuid];
+  if (sede == null) return base;
+  final varias = (ref.watch(sedesActivasProvider).value?.length ?? 0) > 1;
+  return base.conSede(nombre: varias ? sede.nombre : null, direccion: sede.direccion, telefono: sede.telefono);
+});
+
 final nombreNegocioProvider = Provider<String>(
   (ref) => ref.watch(datosNegocioProvider).nombre,
 );

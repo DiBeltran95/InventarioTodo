@@ -9,13 +9,16 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/config/app_config.dart';
 import '../../../core/database/daos/productos_dao.dart';
+import '../../../core/database/daos/sedes_dao.dart';
 import '../../../core/money/money.dart';
 import '../../../core/providers/providers.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/estados.dart';
+import '../../auth/domain/sesion.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../inventario/presentation/inventario_providers.dart';
+import '../../inventario/presentation/solicitudes_ajuste_page.dart';
 import '../../ventas/presentation/carrito_provider.dart';
 import '../data/etiquetas_pdf.dart';
 import 'productos_providers.dart';
@@ -68,6 +71,8 @@ class _Contenido extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final dominio = context.dominio;
+    final rol = ref.watch(rolProvider);
+    final sedeActiva = ref.watch(sedeActivaProvider).value;
     final (colorStock, fondoStock) = item.agotado
         ? (dominio.peligro, dominio.peligroContenedor)
         : item.bajoStock
@@ -83,6 +88,19 @@ class _Contenido extends ConsumerWidget {
             icon: const Icon(Icons.qr_code_2_rounded),
             tooltip: 'Código QR',
           ),
+          // El auxiliar no edita ni ajusta: consulta el kardex y pide ajustes.
+          if (rol.solicitaAjustes)
+            PopupMenuButton<String>(
+              onSelected: (opcion) => switch (opcion) {
+                'movimientos' => context.push('${Rutas.movimientos}?producto=${item.uuid}'),
+                'pedir' => _pedirAjuste(context, item),
+                _ => null,
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'movimientos', child: Text('Ver movimientos')),
+                PopupMenuItem(value: 'pedir', child: Text('Pedir conteo, merma o ajuste')),
+              ],
+            ),
           if (esAdmin)
             PopupMenuButton<String>(
               onSelected: (opcion) => switch (opcion) {
@@ -154,7 +172,9 @@ class _Contenido extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Stock actual',
+                        // Con varias sedes, «stock actual» es ambiguo: es el de
+                        // la sede donde está operando el teléfono.
+                        sedeActiva == null ? 'Stock actual' : 'Stock en ${sedeActiva.nombre}',
                         style: context.textos.labelLarge?.copyWith(color: colorStock),
                       ),
                       const SizedBox(height: 4),
@@ -182,6 +202,8 @@ class _Contenido extends ConsumerWidget {
               ),
             ),
           ).animate().fadeIn(duration: 260.ms).slideY(begin: 0.06),
+
+          _StockPorSede(item: item, sedeActivaUuid: sedeActiva?.uuid, rol: rol),
 
           const SizedBox(height: 16),
 
@@ -248,11 +270,22 @@ class _Contenido extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Row(
             children: [
-              // Cargar mercancía es de administración. Al vendedor el botón
-              // sólo le daría un rechazo del enrutador, así que no aparece y
-              // «Vender» ocupa todo el ancho: es la única acción que le toca
-              // desde aquí, y así queda bajo el pulgar.
-              if (esAdmin) ...[
+              // Cargar mercancía es de administración y del auxiliar. Al
+              // vendedor el botón sólo le daría un rechazo del enrutador, así
+              // que no aparece y «Vender» ocupa todo el ancho.
+              //
+              // El auxiliar no vende: sus dos acciones son pedir un ajuste y
+              // registrar una entrada.
+              if (rol.solicitaAjustes)
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _pedirAjuste(context, item),
+                    icon: const Icon(Icons.fact_check_outlined),
+                    label: const Text('Pedir ajuste'),
+                  ),
+                ),
+              if (rol.solicitaAjustes) const SizedBox(width: 12),
+              if (rol.puedeRegistrarEntradas) ...[
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: () => context.push('${Rutas.entrada}?producto=${item.uuid}'),
@@ -260,27 +293,28 @@ class _Contenido extends ConsumerWidget {
                     label: const Text('Entrada'),
                   ),
                 ),
-                const SizedBox(width: 12),
+                if (rol.puedeVender) const SizedBox(width: 12),
               ],
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: () {
-                    ref.read(carritoProvider.notifier).agregar(item);
-                    HapticFeedback.mediumImpact();
-                    mostrarMensaje(
-                      context,
-                      '${item.nombre} agregado al carrito',
-                      esExito: true,
-                      accion: SnackBarAction(
-                        label: 'Ver',
-                        onPressed: () => context.push(Rutas.carrito),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.add_shopping_cart_rounded),
-                  label: const Text('Vender'),
+              if (rol.puedeVender)
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      ref.read(carritoProvider.notifier).agregar(item);
+                      HapticFeedback.mediumImpact();
+                      mostrarMensaje(
+                        context,
+                        '${item.nombre} agregado al carrito',
+                        esExito: true,
+                        accion: SnackBarAction(
+                          label: 'Ver',
+                          onPressed: () => context.push(Rutas.carrito),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.add_shopping_cart_rounded),
+                    label: const Text('Vender'),
+                  ),
                 ),
-              ),
             ],
           ),
         ),
@@ -289,6 +323,18 @@ class _Contenido extends ConsumerWidget {
   }
 
   // ── Diálogos ──────────────────────────────────────────────────────────────
+
+  Future<void> _pedirAjuste(BuildContext context, ProductoConCategoria item) async {
+    final enviado = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => HojaSolicitudAjuste(productoUuid: item.uuid, nombre: item.nombre, stock: item.stock),
+    );
+    if (enviado == true && context.mounted) {
+      mostrarMensaje(context, 'Solicitud enviada: tu gerente la verá para aprobarla', esExito: true);
+    }
+  }
 
   void _mostrarQr(BuildContext context, WidgetRef ref, ProductoConCategoria item) {
     showModalBottomSheet<void>(
@@ -716,7 +762,7 @@ class _UltimosMovimientos extends ConsumerWidget {
     // El kardex es información de inventario, no de mostrador: quién cargó
     // qué y cuándo. Además, «Ver todo» lleva a una ruta de administración que
     // al vendedor le rebotaría.
-    if (!ref.watch(esGestorProvider)) return const SizedBox.shrink();
+    if (!ref.watch(rolProvider).puedeRegistrarEntradas) return const SizedBox.shrink();
     if (movimientos.isEmpty) return const SizedBox.shrink();
 
     return Card(
@@ -748,6 +794,72 @@ class _UltimosMovimientos extends ConsumerWidget {
             ),
           const SizedBox(height: 8),
         ],
+      ),
+    );
+  }
+}
+
+final _stockPorSedeProvider = StreamProvider.autoDispose.family<List<StockEnSede>, String>(
+  (ref, uuid) => ref.watch(sedesDaoProvider).observarStockPorSede(uuid),
+);
+
+/// Cuánto hay en cada sede visible. Sólo aparece con dos o más sedes: con una,
+/// repetiría la tarjeta de arriba. Desde aquí se pide el traslado hacia la sede
+/// activa, que es justo cuando uno descubre que en otra sede sí hay.
+class _StockPorSede extends ConsumerWidget {
+  const _StockPorSede({required this.item, required this.sedeActivaUuid, required this.rol});
+
+  final ProductoConCategoria item;
+  final String? sedeActivaUuid;
+  final RolUsuario rol;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final lista = ref.watch(_stockPorSedeProvider(item.uuid)).value ?? const <StockEnSede>[];
+    if (lista.length < 2) return const SizedBox.shrink();
+    final otraConStock = lista.any((s) => s.sede.uuid != sedeActivaUuid && s.stock.milesimas > 0);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Card(
+        child: Column(
+          children: [
+            ListTile(
+              title: Text('Por sede', style: context.textos.titleSmall),
+              trailing: rol.pideTraslados && otraConStock && sedeActivaUuid != null
+                  ? TextButton.icon(
+                      onPressed: () => context.push(
+                        '${Rutas.trasladoNuevo}?producto=${item.uuid}&destino=$sedeActivaUuid',
+                      ),
+                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                      label: const Text('Pedir traslado'),
+                    )
+                  : null,
+            ),
+            for (final s in lista)
+              ListTile(
+                dense: true,
+                leading: Icon(
+                  s.sede.uuid == sedeActivaUuid ? Icons.location_on_rounded : Icons.storefront_outlined,
+                  size: 20,
+                  color: s.sede.uuid == sedeActivaUuid ? context.colores.primary : null,
+                ),
+                title: Text(s.sede.nombre),
+                subtitle: s.minimo == null ? null : Text('Mínimo ${s.minimo!.format()}'),
+                trailing: Text(
+                  s.stock.formatConUnidad(item.producto.unidadMedida),
+                  style: context.textos.titleSmall?.copyWith(
+                    color: s.stock.milesimas <= 0
+                        ? context.dominio.peligro
+                        : s.minimo != null && s.stock.milesimas <= s.minimo!.milesimas
+                            ? context.dominio.advertencia
+                            : null,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 6),
+          ],
+        ),
       ),
     );
   }

@@ -10,6 +10,7 @@ class DatosNegocio {
     this.direccion,
     this.telefono,
     this.pieTicket,
+    this.sede,
   });
 
   /// Lee los datos de un mapa de configuración.
@@ -36,6 +37,21 @@ class DatosNegocio {
   final String? direccion;
   final String? telefono;
   final String? pieTicket;
+
+  /// Nombre de la sede donde se hizo la venta. Sólo se imprime cuando el
+  /// negocio tiene varias: con una, sería ruido.
+  final String? sede;
+
+  /// Los datos del ticket de una sede: su dirección y teléfono sustituyen a
+  /// los generales cuando los tiene; si no, se queda el del negocio.
+  DatosNegocio conSede({String? nombre, String? direccion, String? telefono}) => DatosNegocio(
+        nombre: this.nombre,
+        nit: nit,
+        direccion: (direccion?.trim().isEmpty ?? true) ? this.direccion : direccion!.trim(),
+        telefono: (telefono?.trim().isEmpty ?? true) ? this.telefono : telefono!.trim(),
+        pieTicket: pieTicket,
+        sede: nombre,
+      );
 }
 
 /// Claves de `configuracion` que describen al negocio.

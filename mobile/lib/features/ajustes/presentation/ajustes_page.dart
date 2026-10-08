@@ -185,55 +185,55 @@ class AjustesPage extends ConsumerWidget {
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => _cambiarPassword(context, ref),
               ),
-              // Sólo el administrador gestiona cuentas. La app no tiene registro
-              // público: es un punto de venta, no una app de consumo — quien se
-              // registrara solo tendría acceso al inventario del negocio.
-              if (ref.watch(esGestorProvider)) ...[
+              // Vendedores y auxiliares pertenecen a una sede y pueden pedir
+              // pasar a otra; las sedes de un gerente las asigna el director.
+              if (sesion?.rol.esDeUnaSede ?? false)
                 ListTile(
-                  leading: const Icon(Icons.group_outlined),
-                  title: const Text('Cuentas de acceso'),
-                  subtitle: const Text('Crear y administrar vendedores'),
+                  leading: const Icon(Icons.swap_horiz_rounded),
+                  title: const Text('Solicitar cambio de sede'),
+                  subtitle: Text('Trabajas en ${ref.watch(sedeActivaProvider).value?.nombre ?? '…'}'),
                   trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Rutas.usuarios),
+                  onTap: () => context.push(Rutas.cambioSede),
                 ),
-                ListTile(
-                  leading: const Icon(Icons.storefront_outlined),
-                  title: const Text('Datos del negocio'),
-                  subtitle: const Text('Nombre, NIT y contacto del ticket'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Rutas.negocio),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.account_balance_wallet_outlined),
-                  title: const Text('Medios de pago'),
-                  subtitle: const Text('Con qué cobras y el QR del cliente'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Rutas.metodosPago),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.category_outlined),
-                  title: const Text('Categorías'),
-                  subtitle: const Text('Cómo se agrupa el catálogo'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Rutas.categorias),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.local_shipping_outlined),
-                  title: const Text('Proveedores'),
-                  subtitle: const Text('A quién le compras'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Rutas.proveedores),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.point_of_sale_outlined),
-                  title: const Text('Control de cajas'),
-                  subtitle: const Text('Qué ha vendido cada empleado'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.push(Rutas.empleados),
-                ),
-              ],
             ],
           ),
+
+          // La app no tiene registro público: es un punto de venta, no una app
+          // de consumo — quien se registrara solo tendría acceso al inventario
+          // del negocio. Las cuentas las crean el director y los gerentes.
+          if (sesion?.rol.esGestor ?? false)
+            _Grupo(
+              titulo: 'Gestión',
+              hijos: [
+                _Enlace(
+                  Icons.group_outlined,
+                  'Empleados',
+                  'Cuentas, sedes, horarios y acceso',
+                  Rutas.usuarios,
+                ),
+                if (sesion!.rol.esDirector) ...[
+                  _Enlace(Icons.store_mall_directory_outlined, 'Sedes', 'Crear y editar sedes', Rutas.sedes),
+                  _Enlace(Icons.storefront_outlined, 'Datos del negocio', 'Nombre, NIT y contacto del ticket', Rutas.negocio),
+                ],
+                _Enlace(
+                  Icons.account_balance_wallet_outlined,
+                  'Medios de pago',
+                  'Con qué cobras, por sede, y las entidades de crédito',
+                  Rutas.metodosPago,
+                ),
+                _Enlace(Icons.category_outlined, 'Categorías', 'Cómo se agrupa el catálogo', Rutas.categorias),
+                _Enlace(Icons.local_shipping_outlined, 'Proveedores', 'A quién le compras', Rutas.proveedores),
+                _Enlace(Icons.point_of_sale_outlined, 'Control de cajas', 'Qué ha vendido cada empleado', Rutas.empleados),
+                _Enlace(Icons.fact_check_outlined, 'Cierres de caja', 'Diferencias por turno y revisión', Rutas.cierres),
+                _Enlace(
+                  Icons.account_balance_outlined,
+                  'Cuentas por cobrar',
+                  'Lo que deben Addi, Crediya y demás entidades',
+                  Rutas.cuentasPorCobrar,
+                ),
+                _Enlace(Icons.manage_search_rounded, 'Auditoría', 'Quién hizo qué, dónde y cuándo', Rutas.auditoria),
+              ],
+            ),
 
           _Grupo(
             titulo: 'Sesión',
@@ -477,6 +477,25 @@ class AjustesPage extends ConsumerWidget {
 }
 
 // ─── Piezas ─────────────────────────────────────────────────────────────────
+
+/// Fila que abre otra pantalla.
+class _Enlace extends StatelessWidget {
+  const _Enlace(this.icono, this.titulo, this.subtitulo, this.ruta);
+
+  final IconData icono;
+  final String titulo;
+  final String subtitulo;
+  final String ruta;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+        leading: Icon(icono),
+        title: Text(titulo),
+        subtitle: Text(subtitulo),
+        trailing: const Icon(Icons.chevron_right_rounded),
+        onTap: () => context.push(ruta),
+      );
+}
 
 class _Grupo extends StatelessWidget {
   const _Grupo({required this.titulo, required this.hijos});

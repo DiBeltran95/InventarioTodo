@@ -33,8 +33,126 @@ class StockEnSede {
   final Cantidad? minimo;
 }
 
+/// Ventas de una sede hoy y ayer, para las tarjetas del director.
+class VentasSede {
+  const VentasSede({required this.sede, required this.hoy, required this.numHoy, required this.ayer});
+
+  final Sede sede;
+  final Money hoy;
+  final int numHoy;
+  final Money ayer;
+
+  /// Variación porcentual frente a ayer; null si ayer no hubo ventas.
+  double? get variacion => ayer.esCero ? null : (hoy.centavos - ayer.centavos) / ayer.centavos * 100;
+}
+
+/// Un cambio de stock que no es una venta: entrada, ajuste, merma, traslado…
+/// Es lo que el Director General revisa de gerentes y auxiliares.
+class CambioInventario {
+  const CambioInventario({required this.movimiento, required this.producto, this.sede, this.usuario});
+
+  final Movimiento movimiento;
+  final Producto producto;
+  final Sede? sede;
+  final Usuario? usuario;
+}
+
 class SedesDao {
   SedesDao(this.db, this.sync);
+
+  /// Ventas completadas de hoy y ayer por sede. Las sedes sin ventas aparecen
+  /// igual, en cero: que una sede no venda nada también es noticia.
+  Stream<List<VentasSede>> observarVentasPorSede({required String hoy, required String ayer}) {
+    return db
+        .customSelect(
+          '''
+          SELECT s.uuid AS sede_uuid,
+                 COALESCE(SUM(CASE WHEN v.fecha_local = ? THEN v.total END), 0) AS hoy,
+                 COUNT(CASE WHEN v.fecha_local = ? THEN 1 END)                  AS num_hoy,
+                 COALESCE(SUM(CASE WHEN v.fecha_local = ? THEN v.total END), 0) AS ayer
+            FROM sedes s
+            LEFT JOIN ventas v
+              ON v.sede_uuid = s.uuid AND v.estado = 'COMPLETADA' AND v.deleted_at IS NULL
+                 AND v.fecha_local >= ?
+           WHERE s.deleted_at IS NULL AND s.activo = 1
+           GROUP BY s.uuid
+          ''',
+          variables: [Variable(hoy), Variable(hoy), Variable(ayer), Variable(ayer)],
+          readsFrom: {db.sedes, db.ventas},
+        )
+        .watch()
+        .asyncMap((filas) async {
+      final sedes = {for (final s in await db.select(db.sedes).get()) s.uuid: s};
+      final lista = [
+        for (final f in filas)
+          if (sedes[f.read<String>('sede_uuid')] != null)
+            VentasSede(
+              sede: sedes[f.read<String>('sede_uuid')]!,
+              hoy: Money(f.read<int>('hoy')),
+              numHoy: f.read<int>('num_hoy'),
+              ayer: Money(f.read<int>('ayer')),
+            ),
+      ]..sort((a, b) => b.hoy.centavos.compareTo(a.hoy.centavos));
+      return lista;
+    });
+  }
+
+  /// Ventas completadas desde [desde] por sede, con su margen. Para la sección
+  /// «Ventas por sede» de Reportes.
+  Stream<List<({Sede sede, Money total, int numero, Money margen})>> observarTotalesPorSede({
+    required String desde,
+  }) {
+    return db
+        .customSelect(
+          '''
+          SELECT sede_uuid, COALESCE(SUM(total), 0) AS total, COUNT(*) AS numero,
+                 COALESCE(SUM(total - costo_total), 0) AS margen
+            FROM ventas
+           WHERE estado = 'COMPLETADA' AND deleted_at IS NULL AND fecha_local >= ? AND sede_uuid IS NOT NULL
+           GROUP BY sede_uuid
+           ORDER BY total DESC
+          ''',
+          variables: [Variable(desde)],
+          readsFrom: {db.ventas},
+        )
+        .watch()
+        .asyncMap((filas) async {
+      final sedes = {for (final s in await db.select(db.sedes).get()) s.uuid: s};
+      return [
+        for (final f in filas)
+          if (sedes[f.read<String>('sede_uuid')] != null)
+            (
+              sede: sedes[f.read<String>('sede_uuid')]!,
+              total: Money(f.read<int>('total')),
+              numero: f.read<int>('numero'),
+              margen: Money(f.read<int>('margen')),
+            ),
+      ];
+    });
+  }
+
+  /// Cambios de stock desde [desde] (día del negocio) que no son ventas ni
+  /// anulaciones, del más reciente al más antiguo.
+  Stream<List<CambioInventario>> observarCambiosInventario({required String desde, int limite = 30}) {
+    final consulta = db.select(db.movimientos).join([
+      innerJoin(db.productos, db.productos.uuid.equalsExp(db.movimientos.productoUuid)),
+      leftOuterJoin(db.sedes, db.sedes.uuid.equalsExp(db.movimientos.sedeUuid)),
+      leftOuterJoin(db.usuarios, db.usuarios.uuid.equalsExp(db.movimientos.usuarioUuid)),
+    ])
+      ..where(db.movimientos.fechaLocal.isBiggerOrEqualValue(desde) &
+          db.movimientos.tipo.isNotIn(const ['VENTA', 'ANULACION_VENTA']))
+      ..orderBy([OrderingTerm.desc(db.movimientos.fecha)])
+      ..limit(limite);
+    return consulta.watch().map((filas) => [
+          for (final f in filas)
+            CambioInventario(
+              movimiento: f.readTable(db.movimientos),
+              producto: f.readTable(db.productos),
+              sede: f.readTableOrNull(db.sedes),
+              usuario: f.readTableOrNull(db.usuarios),
+            ),
+        ]);
+  }
 
   final AppDatabase db;
   final SyncDao sync;

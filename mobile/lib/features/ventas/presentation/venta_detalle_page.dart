@@ -29,7 +29,7 @@ class VentaDetallePage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final asincrono = ref.watch(ventaProvider(uuid));
     final puedeAnular = ref.watch(rolProvider).puedeAnularVentas;
-    final negocio = ref.watch(datosNegocioProvider);
+    final negocio = ref.watch(datosTicketProvider(asincrono.value?.venta.sedeUuid));
 
     return asincrono.when(
       loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),

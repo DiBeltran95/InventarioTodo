@@ -11,6 +11,7 @@ import '../../../core/utils/fechas.dart';
 import '../../../core/widgets/estados.dart';
 import '../../../core/widgets/sync_chip.dart';
 import '../../auth/presentation/auth_providers.dart';
+import '../../sedes/presentation/sedes_providers.dart';
 import 'ventas_providers.dart';
 
 /// Historial de ventas.
@@ -26,6 +27,7 @@ class VentasPage extends ConsumerWidget {
     final filtro = ref.watch(filtroVentasProvider);
     final ventas = ref.watch(ventasProvider);
     final esAdmin = ref.watch(esGestorProvider);
+    final sedes = ref.watch(misSedesProvider).value ?? const <Sede>[];
 
     return Scaffold(
       body: SafeArea(
@@ -69,6 +71,31 @@ class VentasPage extends ConsumerWidget {
               )
             else
               _SelectorDia(filtro: filtro),
+            // Con varias sedes, el gestor filtra por sede; sin filtro ve todas
+            // las suyas, y cada fila dice de cuál es.
+            if (esAdmin && sedes.length > 1)
+              SizedBox(
+                height: 44,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  children: [
+                    FilterChip(
+                      label: const Text('Todas las sedes'),
+                      selected: filtro.sede == null,
+                      onSelected: (_) => ref.read(filtroVentasProvider.notifier).porSede(null),
+                    ),
+                    for (final s in sedes) ...[
+                      const SizedBox(width: 8),
+                      FilterChip(
+                        label: Text(s.nombre),
+                        selected: filtro.sede == s.uuid,
+                        onSelected: (_) => ref.read(filtroVentasProvider.notifier).porSede(s.uuid),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             Expanded(
               child: ventas.when(
                 loading: () => const SkeletonLista(),
@@ -299,6 +326,8 @@ class _FilaVenta extends ConsumerWidget {
             : ref.watch(nombresUsuariosProvider).value?[venta.usuarioUuid!] ??
                 'Sin asignar')
         : null;
+    final indice = ref.watch(indiceSedesProvider).value ?? const {};
+    final sede = mostrarVendedor && indice.length > 1 ? indice[venta.sedeUuid]?.nombre : null;
 
     return Card(
       child: ListTile(
@@ -334,6 +363,7 @@ class _FilaVenta extends ConsumerWidget {
           [
             Fechas.formatHora(venta.fecha),
             ?vendedor,
+            ?sede,
             if (venta.clienteNombre != null) venta.clienteNombre!,
             _metodo(venta.metodoPago),
           ].join(' · '),
