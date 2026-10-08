@@ -434,33 +434,16 @@ SET FOREIGN_KEY_CHECKS = 1;
 --     de insertar, lo que serializa los movimientos concurrentes del mismo SKU.
 -- ============================================================================
 
-DROP TRIGGER IF EXISTS trg_mov_before_insert;
-DELIMITER $$
-CREATE TRIGGER trg_mov_before_insert
-BEFORE INSERT ON movimientos_inventario
-FOR EACH ROW
-BEGIN
-  DECLARE v_stock DECIMAL(14,3);
-  SELECT stock_actual INTO v_stock FROM productos WHERE id = NEW.producto_id;
-  SET NEW.stock_anterior   = IFNULL(v_stock, 0);
-  SET NEW.stock_resultante = IFNULL(v_stock, 0) + NEW.cantidad;
-  IF NEW.fecha_local IS NULL THEN
-    SET NEW.fecha_local = DATE(NEW.fecha);
-  END IF;
-END$$
-DELIMITER ;
-
-DROP TRIGGER IF EXISTS trg_mov_after_insert;
-DELIMITER $$
-CREATE TRIGGER trg_mov_after_insert
-AFTER INSERT ON movimientos_inventario
-FOR EACH ROW
-BEGIN
-  UPDATE productos
-     SET stock_actual = stock_actual + NEW.cantidad
-   WHERE id = NEW.producto_id;
-END$$
-DELIMITER ;
+-- Los triggers que MANTIENEN el stock (trg_mov_before_insert y
+-- trg_mov_after_insert) no están aquí: desde la migración 002 mantienen dos
+-- proyecciones —`stock_sedes` por sede y `productos.stock_actual` total— y
+-- usan la columna `movimientos_inventario.sede_id`, que crea esa migración.
+-- MariaDB valida las columnas de NEW al crear un trigger, así que no pueden
+-- definirse antes. Fuente única: migrations/002_multisede.sql.
+--
+-- Que NO estén aquí también protege a quien reimporte este archivo a mano: no
+-- reinstala la versión de una sola sede, que dejaría el stock por sede
+-- congelado sin dar ningún error.
 
 -- Inmutabilidad del libro: prohíbe alterar el efecto de un movimiento ya
 -- registrado. Corregir se hace insertando un movimiento compensatorio.
@@ -492,26 +475,9 @@ DELIMITER ;
 -- 16. PROCEDIMIENTOS
 -- ============================================================================
 
--- Reconstruye stock_actual desde el libro de movimientos. Es la red de
--- seguridad que permite afirmar que la proyección es recalculable.
-DROP PROCEDURE IF EXISTS sp_recalcular_stock;
-DELIMITER $$
-CREATE PROCEDURE sp_recalcular_stock(IN p_producto_uuid CHAR(36))
-BEGIN
-  IF p_producto_uuid IS NULL OR p_producto_uuid = '' THEN
-    UPDATE productos p
-       SET p.stock_actual = IFNULL(
-             (SELECT SUM(m.cantidad) FROM movimientos_inventario m
-               WHERE m.producto_id = p.id), 0);
-  ELSE
-    UPDATE productos p
-       SET p.stock_actual = IFNULL(
-             (SELECT SUM(m.cantidad) FROM movimientos_inventario m
-               WHERE m.producto_id = p.id), 0)
-     WHERE p.uuid = p_producto_uuid;
-  END IF;
-END$$
-DELIMITER ;
+-- sp_recalcular_stock (reconstruye las proyecciones desde el libro) vive en
+-- migrations/002_multisede.sql: recalcula por sede y el total, y necesita las
+-- tablas de esa migración.
 
 -- Consecutivo de folio por dispositivo. Se usa sólo cuando la venta se crea
 -- en línea; una venta creada offline trae su propio número ya asignado.
