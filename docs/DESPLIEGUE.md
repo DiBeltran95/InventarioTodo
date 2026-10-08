@@ -263,3 +263,101 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 Cambiarlos invalida todas las sesiones abiertas: los usuarios tendrán que volver a iniciar sesión
 **con conexión** una vez. Las ventas guardadas en los dispositivos no se pierden — siguen en la cola
 local y se envían tras el nuevo login.
+
+---
+
+## 7. Actualizar a la versión multisede
+
+La versión multisede vive en otro repositorio (`DiBeltran95/InventarioTodo`) y usa **el mismo
+servidor y la misma base**. La migración `database/migrations/002_multisede.sql` es aditiva: no
+borra ni renombra nada, crea la «Sede principal» y le asigna todo lo que ya existe (stock, ventas,
+movimientos, dispositivos y empleados). Los `ADMIN` actuales pasan a ser **Director General** sin
+cambiar de valor en la base.
+
+El orden importa. Hazlo en este orden y no te saltes pasos:
+
+### 7.1 Respaldo
+
+Antes de tocar nada, un volcado completo desde el panel (*Bases de datos → Copias de seguridad*) o
+con `mysqldump`. Guárdalo fuera del servidor: contiene los hashes de las contraseñas.
+
+### 7.2 Código nuevo junto al viejo
+
+```bash
+cd ~
+git clone -b main https://github.com/DiBeltran95/InventarioTodo.git
+cp AppInventario/backend/.env InventarioTodo/backend/.env
+cd InventarioTodo/backend
+npm install
+npm run db:ping            # misma base: tiene que salir en verde
+```
+
+`-b main` es necesario mientras la rama por defecto del repositorio en GitHub no sea `main`.
+
+### 7.3 Migración
+
+```bash
+npm run db:migrate         # aplica schema.sql y las migraciones; se puede repetir sin daño
+npm run db:check
+```
+
+Mientras no se reinicie el sitio, el backend viejo sigue atendiendo con la base ya migrada: los
+triggers asignan a la sede principal lo que llegue sin sede, así que no se pierde nada en ese rato.
+
+### 7.4 Cambiar el sitio al backend nuevo
+
+Panel → *Sitios → tu sitio* → directorio de trabajo:
+
+```
+/home/inventarios/InventarioTodo/backend
+```
+
+Reinicia y comprueba:
+
+```bash
+curl https://inventarios.alwaysdata.net/health
+```
+
+El login (§5) ahora devuelve además `sedes`, `sede_activa` y `jornada`.
+
+### 7.5 La app nueva en TODOS los teléfonos
+
+- En cada teléfono, **sincroniza antes de actualizar** (que no quede nada «pendiente de enviar»).
+  La base local se migra sola al abrir la app nueva y conserva la cola, pero sincronizar antes
+  evita sorpresas.
+- La app vieja sigue funcionando contra el backend nuevo, pero no sabe de sedes: ve el stock
+  **total** y trata a un Gerente o a un Auxiliar como vendedor.
+
+### 7.6 Sólo entonces, crear las demás sedes
+
+Con todos los teléfonos actualizados:
+
+1. *Ajustes → Gestión → Sedes*: renombra la «Sede principal» y crea las demás (código corto: aparece
+   en los traslados).
+2. *Ajustes → Gestión → Empleados*: asigna cada vendedor y auxiliar a su sede, crea los gerentes
+   con sus sedes y, si quieres, el horario de cada uno.
+3. *Ajustes → Gestión → Medios de pago*: los medios propios de una sede (su Nequi, su datáfono) y
+   las entidades de crédito (Addi, Crediya…) con su comisión y días de pago.
+
+Para mover mercancía a una sede nueva se usa un **traslado** desde la principal; para cargar lo que
+llega del proveedor, una **entrada** en la sede donde llega.
+
+### 7.7 Comprobación
+
+Con la API apuntando a una base de **prueba** (nunca la de producción), estos dos scripts recorren
+la operación multisede completa:
+
+```bash
+node scripts/smoke-multisede.mjs http://localhost:3999 admin@inventario.local <clave>
+# contrato app ↔ servidor (ver la cabecera del script):
+node scripts/contrato-app.mjs preparar /tmp/contrato/fixtures.json http://localhost:3999
+(cd ../mobile && CONTRATO_FIXTURES=/tmp/contrato/fixtures.json flutter test test/contrato_app_test.dart)
+node scripts/contrato-app.mjs enviar /tmp/contrato/fixtures.json /tmp/contrato/ops.json
+```
+
+### Vuelta atrás
+
+La migración no hace falta deshacerla: el backend viejo funciona con la base migrada. Basta con
+volver a poner el directorio de trabajo en `/home/inventarios/AppInventario/backend` y reiniciar.
+Lo que se haya hecho con sedes nuevas mientras tanto queda en la base, pero el backend viejo lo
+verá todo como de una sola sede.

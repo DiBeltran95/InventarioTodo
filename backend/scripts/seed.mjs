@@ -118,6 +118,15 @@ try {
       [uuidv7(), nombre, email, await hash(pass), rol],
     );
     if (rol === 'ADMIN') adminId = r.insertId;
+    // El vendedor pertenece a una sede: la principal, que crea la migración 002.
+    // El director no tiene sedes (las ve todas).
+    if (rol !== 'ADMIN') {
+      await conn.query(
+        `INSERT IGNORE INTO usuario_sedes (usuario_id, sede_id)
+         SELECT ?, id FROM sedes WHERE es_principal = 1 AND deleted_at IS NULL ORDER BY id LIMIT 1`,
+        [r.insertId],
+      );
+    }
     console.log(`  ${c.green}✓${c.reset} Usuario ${email} (${rol})`);
   }
 

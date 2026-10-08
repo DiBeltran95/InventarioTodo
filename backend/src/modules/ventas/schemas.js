@@ -36,6 +36,8 @@ export const crearVentaSchema = z.object({
     .optional(),
   cliente_nombre: z.string().max(150).nullish(),
   cliente_documento: z.string().max(40).nullish(),
+  /** Caja (turno) abierta de quien cobra: la usa el cierre de caja. */
+  turno_uuid: z.string().uuid().nullish(),
   metodo_pago: z.enum(METODOS_PAGO).default('EFECTIVO'),
   monto_recibido: dinero.nullish(),
 

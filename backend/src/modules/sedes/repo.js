@@ -6,8 +6,8 @@
  * escribió); fuera, con el pool.
  */
 import { query } from '../../db/pool.js';
-import { txQuery } from '../../db/tx.js';
-import { ROLES } from '../../config/constants.js';
+import { txQuery, txExecute } from '../../db/tx.js';
+import { ROLES, ROLES_DE_UNA_SEDE } from '../../config/constants.js';
 import { notFound } from '../../utils/ApiError.js';
 
 const leer = (conn, sql, params) => (conn ? txQuery(conn, sql, params) : query(sql, params));
@@ -24,7 +24,33 @@ export async function cargarAlcance(usuario, conn = null) {
       WHERE us.usuario_id = ?`,
     [usuario.id],
   );
-  return { esDirector: false, sedeIds: filas.map((f) => Number(f.sede_id)) };
+  const sedeIds = filas.map((f) => Number(f.sede_id));
+
+  // Vendedor o auxiliar sin sede: sólo pasa con cuentas creadas por el backend
+  // anterior a las sedes (entre aplicar la migración y desplegar este backend,
+  // o tras volver atrás). Se le asigna la sede principal, igual que hizo la
+  // migración con todos los demás, en vez de dejarlo fuera con SIN_SEDE. Es
+  // idempotente y sólo ocurre una vez por cuenta.
+  if (!sedeIds.length && ROLES_DE_UNA_SEDE.includes(usuario.rol)) {
+    const principal = await leerUno(
+      conn,
+      'SELECT id FROM sedes WHERE es_principal = 1 AND deleted_at IS NULL ORDER BY id LIMIT 1',
+      [],
+    );
+    if (principal) {
+      const insertar = 'INSERT IGNORE INTO usuario_sedes (usuario_id, sede_id) VALUES (?, ?)';
+      const tocar = 'UPDATE usuarios SET updated_at = UTC_TIMESTAMP(3) WHERE id = ?';
+      if (conn) {
+        await txExecute(conn, insertar, [usuario.id, principal.id]);
+        await txExecute(conn, tocar, [usuario.id]);
+      } else {
+        await query(insertar, [usuario.id, principal.id]);
+        await query(tocar, [usuario.id]);
+      }
+      sedeIds.push(Number(principal.id));
+    }
+  }
+  return { esDirector: false, sedeIds };
 }
 
 export async function sedePorUuid(conn, uuid) {

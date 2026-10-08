@@ -178,6 +178,14 @@ async function main() {
   const producto = r.data.find((p) => Number(p.stock_actual) >= 10);
   afirmar(!!producto, `hay un producto con stock en la principal (${producto?.nombre})`);
   const stockTotalAntes = Number(producto.stock_actual);
+  // El stock de la principal se lee aparte: en una base ya usada, parte del
+  // total puede estar en otras sedes.
+  const pullAntes = await director.pull();
+  const principalAntes = Number(
+    pullAntes.data.entidades.stock_sedes.items.find(
+      (s) => s.producto_uuid === producto.uuid && s.sede_uuid === principal.uuid,
+    )?.stock_actual ?? stockTotalAntes,
+  );
 
   const traslado = { uuid: randomUUID(), detalle: randomUUID() };
   let res = await caja.push([
@@ -210,8 +218,8 @@ async function main() {
   };
   afirmar((await stockDe(gerenteCli, norte.uuid)) === 5, 'Norte tiene 5');
   afirmar(
-    (await stockDe(director, principal.uuid)) === stockTotalAntes - 5,
-    `la principal tiene ${stockTotalAntes - 5}`,
+    (await stockDe(director, principal.uuid)) === principalAntes - 5,
+    `la principal tiene ${principalAntes - 5}`,
   );
   r = await director.pedir('GET', `/productos/${producto.uuid}`);
   afirmar(Number(r.data.stock_actual) === stockTotalAntes, 'el total del producto no cambió con el traslado');
@@ -241,7 +249,7 @@ async function main() {
   afirmar(res[0]?.estado === 'OK', 'Ana vende 2 en Norte', JSON.stringify(res[0]?.error));
   afirmar((await stockDe(gerenteCli, norte.uuid)) === 3, 'Norte queda en 3');
   afirmar(
-    (await stockDe(director, principal.uuid)) === stockTotalAntes - 5,
+    (await stockDe(director, principal.uuid)) === principalAntes - 5,
     'la venta de Norte no tocó la principal',
   );
 
