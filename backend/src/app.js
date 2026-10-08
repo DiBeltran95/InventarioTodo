@@ -10,6 +10,9 @@ import { limitadorGeneral } from './middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 import rutasAuth from './modules/auth/routes.js';
+import rutasEmpleados from './modules/empleados/index.js';
+import rutasSedes from './modules/sedes/index.js';
+import rutasAuditoria from './modules/auditoria/index.js';
 import rutasCategorias from './modules/categorias/index.js';
 import rutasProveedores from './modules/proveedores/index.js';
 import rutasMetodosPago from './modules/metodosPago/index.js';
@@ -98,7 +101,12 @@ export function crearApp() {
 
   const api = express.Router();
   api.use(limitadorGeneral);
+  // Antes que /auth: las cuentas de empleados viven en /auth/usuarios para que
+  // la app vieja siga encontrándolas, pero las gestiona su propio módulo.
+  api.use('/auth/usuarios', rutasEmpleados);
   api.use('/auth', rutasAuth);
+  api.use('/sedes', rutasSedes);
+  api.use('/auditoria', rutasAuditoria);
   api.use('/categorias', rutasCategorias);
   api.use('/proveedores', rutasProveedores);
   api.use('/metodos-pago', rutasMetodosPago);

@@ -1,7 +1,8 @@
 import { query, queryOne } from '../../db/pool.js';
 import { txQuery, txQueryOne, txExecute } from '../../db/tx.js';
 import { nuevoUuid } from '../../utils/ids.js';
-import { notFound, badRequest, conflict } from '../../utils/ApiError.js';
+import { notFound, badRequest, conflict, forbidden } from '../../utils/ApiError.js';
+import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
 import { diaHabil } from '../../utils/dates.js';
 import {
   calcularLinea,
@@ -235,16 +236,19 @@ export async function crearVenta(conn, datos, ctx) {
       const r = await txExecute(
         conn,
         `INSERT INTO ventas
-           (uuid, numero, usuario_id, dispositivo_uuid, cliente_nombre, cliente_documento,
+           (uuid, numero, usuario_id, dispositivo_uuid, sede_id, turno_uuid,
+            cliente_nombre, cliente_documento,
             subtotal, descuento_total, impuesto_total, total, costo_total,
             metodo_pago, monto_recibido, cambio, estado, notas,
             fecha, fecha_local, creada_offline, sincronizada_en)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'COMPLETADA',?,?,?,?, UTC_TIMESTAMP(3))`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'COMPLETADA',?,?,?,?, UTC_TIMESTAMP(3))`,
         [
           uuid,
           folio,
           ctx?.usuarioId ?? null,
           ctx?.dispositivoUuid ?? null,
+          ctx?.sedeId ?? null,
+          datos.turno_uuid ?? null,
           datos.cliente_nombre ?? null,
           datos.cliente_documento ?? null,
           totales.subtotal,
@@ -314,10 +318,12 @@ export async function crearVenta(conn, datos, ctx) {
   //    Se reutiliza el uuid que mandó el dispositivo: si el servidor inventara
   //    uno nuevo, el pull lo bajaría como fila distinta y el kardex local
   //    mostraría la venta dos veces.
+  const quedaronNegativos = new Map();
   for (const l of lineas) {
-    await insertarMovimiento(
+    const producto = productos.get(l.productoUuid);
+    const mov = await insertarMovimiento(
       conn,
-      productos.get(l.productoUuid),
+      producto,
       {
         uuid: l.movimiento_uuid,
         tipo: 'VENTA',
@@ -332,22 +338,25 @@ export async function crearVenta(conn, datos, ctx) {
       },
       ctx,
     );
+    if (toQty(mov.stock_resultante) < 0n) {
+      quedaronNegativos.set(producto.uuid, { producto, stock: mov.stock_resultante });
+    }
   }
 
   // 6) Sobreventa: se acepta y se avisa. No se puede "des-vender" mercancía ya
-  //    entregada, así que rechazarla descuadraría la caja.
-  if (datos.creada_offline) {
-    const negativos = [...productos.values()].filter((p) => toQty(p.stock_actual) < 0n);
-    if (negativos.length) {
-      await registrarAlerta(conn, {
-        tipo: 'SOBREVENTA',
-        severidad: 'CRITICA',
-        productoId: negativos[0].id,
-        ventaId,
-        mensaje: `La venta offline ${numero} dejó ${negativos.length} producto(s) en negativo`,
-        detalle: negativos.map((p) => ({ uuid: p.uuid, nombre: p.nombre, stock: p.stock_actual })),
-      });
-    }
+  //    entregada, así que rechazarla descuadraría la caja. Se mide contra el
+  //    stock de la sede de la venta, no contra el total del negocio.
+  if (datos.creada_offline && quedaronNegativos.size) {
+    const negativos = [...quedaronNegativos.values()];
+    await registrarAlerta(conn, {
+      tipo: 'SOBREVENTA',
+      severidad: 'CRITICA',
+      productoId: negativos[0].producto.id,
+      ventaId,
+      sedeId: ctx?.sedeId,
+      mensaje: `La venta offline ${numero} dejó ${negativos.length} producto(s) en negativo`,
+      detalle: negativos.map((n) => ({ uuid: n.producto.uuid, nombre: n.producto.nombre, stock: n.stock })),
+    });
   }
 
   return obtenerVentaTx(conn, uuid);
@@ -367,10 +376,16 @@ export async function crearVenta(conn, datos, ctx) {
 export async function anularVenta(conn, datos, ctx) {
   const original = await txQueryOne(
     conn,
-    'SELECT id, uuid, numero, estado, fecha_local FROM ventas WHERE uuid = ? FOR UPDATE',
+    'SELECT id, uuid, numero, estado, fecha_local, sede_id FROM ventas WHERE uuid = ? FOR UPDATE',
     [datos.venta_uuid],
   );
   if (!original) throw notFound('Venta');
+  // La anulación ocurre en la sede de la venta, desde donde se pida: el stock
+  // vuelve a los estantes de los que salió.
+  ctx = { ...ctx, sedeId: original.sede_id };
+  if (ctx.alcance && !ctx.alcance.esDirector && !ctx.alcance.sedeIds.includes(Number(original.sede_id))) {
+    throw forbidden('Esa venta es de una sede que no gestionas', 'SEDE_FUERA_DE_ALCANCE');
+  }
 
   if (original.estado === 'ANULADA') {
     const reversa = await txQueryOne(conn, 'SELECT uuid FROM ventas WHERE anula_a_venta_id = ?', [original.id]);
@@ -404,15 +419,16 @@ export async function anularVenta(conn, datos, ctx) {
   const r = await txExecute(
     conn,
     `INSERT INTO ventas
-       (uuid, numero, usuario_id, dispositivo_uuid, subtotal, descuento_total, impuesto_total,
+       (uuid, numero, usuario_id, dispositivo_uuid, sede_id, subtotal, descuento_total, impuesto_total,
         total, costo_total, metodo_pago, estado, anula_a_venta_id, motivo_anulacion,
         fecha, fecha_local, creada_offline, sincronizada_en)
-     VALUES (?,?,?,?,?,?,?,?,?,?, 'ANULADA', ?,?,?,?,?, UTC_TIMESTAMP(3))`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?, 'ANULADA', ?,?,?,?,?, UTC_TIMESTAMP(3))`,
     [
       uuidReversa,
       `${original.numero}-R`,
       ctx?.usuarioId ?? null,
       ctx?.dispositivoUuid ?? null,
+      original.sede_id,
       neg(totalesOriginal.subtotal),
       neg(totalesOriginal.descuento_total),
       neg(totalesOriginal.impuesto_total),
@@ -470,6 +486,17 @@ export async function anularVenta(conn, datos, ctx) {
     "UPDATE ventas SET estado = 'ANULADA', motivo_anulacion = ? WHERE id = ?",
     [datos.motivo ?? 'Anulación', original.id],
   );
+
+  await registrarAuditoria(conn, {
+    usuarioId: ctx?.usuarioId,
+    sedeId: original.sede_id,
+    dispositivoUuid: ctx?.dispositivoUuid,
+    accion: ACCIONES.VENTA_ANULADA,
+    entidad: 'ventas',
+    entidadUuid: original.uuid,
+    antes: { numero: original.numero, total: totalesOriginal.total },
+    despues: { motivo: datos.motivo ?? 'Anulación', reversa: `${original.numero}-R` },
+  });
 
   return {
     anulada: true,

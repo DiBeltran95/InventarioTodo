@@ -79,3 +79,19 @@ export function aMySQLDateTime(d = new Date()) {
   const x = d instanceof Date ? d : new Date(d);
   return x.toISOString().slice(0, 23).replace('T', ' ');
 }
+
+/**
+ * Desfase de la zona respecto a UTC en el instante dado, como '-05:00'.
+ * Sirve para CONVERT_TZ, que sin las tablas de zonas de MariaDB cargadas sólo
+ * entiende desfases numéricos y no nombres como 'America/Bogota'.
+ */
+export function desfaseTexto(tz = env.BUSINESS_TIMEZONE, instante = new Date()) {
+  const partes = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    timeZoneName: 'longOffset',
+  }).formatToParts(instante);
+  const nombre = partes.find((p) => p.type === 'timeZoneName')?.value ?? 'GMT';
+  // 'GMT-05:00' → '-05:00'; 'GMT' (UTC) → '+00:00'
+  const m = /GMT([+-]\d{2}:\d{2})?/.exec(nombre);
+  return m?.[1] ?? '+00:00';
+}

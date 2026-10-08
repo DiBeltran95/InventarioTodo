@@ -4,8 +4,20 @@ import { env } from '../../config/env.js';
 import { query, queryOne } from '../../db/pool.js';
 import { withTransaction, txQuery, txQueryOne, txExecute } from '../../db/tx.js';
 import { nuevoUuid, sha256, tokenAleatorio, prefijoFolioAleatorio } from '../../utils/ids.js';
-import { unauthorized, notFound, badRequest, conflict } from '../../utils/ApiError.js';
+import { ApiError, unauthorized, notFound, badRequest, conflict, forbidden } from '../../utils/ApiError.js';
 import { logger } from '../../utils/logger.js';
+import { GRACIA_CIERRE_TURNO_MIN } from '../../config/constants.js';
+import { evaluarJornada, permitidoConGracia, jornadaDe, leerHorario } from '../../domain/jornada.js';
+import { veSede } from '../../domain/alcance.js';
+import { fueraDeHorario } from '../../middleware/auth.js';
+import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
+import {
+  cargarAlcance,
+  sedePorUuid,
+  sedePrincipal,
+  sedesDeAlcance,
+  sedePublica,
+} from '../sedes/repo.js';
 
 /**
  * Parámetros de Argon2id.
@@ -57,7 +69,7 @@ async function emitirRefreshToken(conn, usuarioId, familia, dispositivoUuid, use
  * El prefijo es lo que permite que dos cajas sin conexión numeren ventas
  * (A1-000001, B7-000001) sin colisionar al sincronizar.
  */
-async function registrarDispositivo(conn, dispositivo, usuarioId) {
+async function registrarDispositivo(conn, dispositivo, usuarioId, sedeId = null) {
   if (!dispositivo) return null;
 
   const existente = await txQueryOne(
@@ -70,10 +82,12 @@ async function registrarDispositivo(conn, dispositivo, usuarioId) {
     await txExecute(
       conn,
       `UPDATE dispositivos
-          SET usuario_id = ?, nombre = ?, plataforma = ?, app_version = ?, activo = 1, deleted_at = NULL
+          SET usuario_id = ?, sede_id = COALESCE(?, sede_id), nombre = ?, plataforma = ?,
+              app_version = ?, activo = 1, deleted_at = NULL
         WHERE id = ?`,
       [
         usuarioId,
+        sedeId,
         dispositivo.nombre,
         dispositivo.plataforma ?? null,
         dispositivo.app_version ?? null,
@@ -91,11 +105,12 @@ async function registrarDispositivo(conn, dispositivo, usuarioId) {
     try {
       await txExecute(
         conn,
-        `INSERT INTO dispositivos (uuid, usuario_id, nombre, plataforma, app_version, prefijo_folio)
-         VALUES (?,?,?,?,?,?)`,
+        `INSERT INTO dispositivos (uuid, usuario_id, sede_id, nombre, plataforma, app_version, prefijo_folio)
+         VALUES (?,?,?,?,?,?,?)`,
         [
           dispositivo.uuid,
           usuarioId,
+          sedeId,
           dispositivo.nombre,
           dispositivo.plataforma ?? null,
           dispositivo.app_version ?? null,
@@ -120,13 +135,57 @@ async function registrarDispositivo(conn, dispositivo, usuarioId) {
   throw conflict('SIN_PREFIJO', 'No se pudo asignar un prefijo de folio al dispositivo');
 }
 
-function perfilPublico(u) {
-  return { uuid: u.uuid, nombre: u.nombre, email: u.email, rol: u.rol, activo: !!u.activo };
+export function perfilPublico(u) {
+  return {
+    uuid: u.uuid,
+    nombre: u.nombre,
+    email: u.email,
+    rol: u.rol,
+    activo: !!u.activo,
+    restringir_horario: !!u.restringir_horario,
+    horario: leerHorario(u.horario),
+    acceso_extra_hasta: u.acceso_extra_hasta ? new Date(u.acceso_extra_hasta).toISOString() : null,
+  };
 }
 
-export async function login({ email, password, dispositivo }, userAgent) {
+const COLUMNAS_USUARIO =
+  'id, uuid, nombre, email, password_hash, rol, activo, restringir_horario, horario, acceso_extra_hasta';
+
+/** Estado de la jornada tal como lo necesita la app para operar sin red. */
+export function jornadaPublica(usuario, ahora = new Date()) {
+  const e = evaluarJornada(jornadaDe(usuario), ahora, env.BUSINESS_TIMEZONE);
+  return {
+    permitido: e.permitido,
+    motivo: e.motivo,
+    hasta: e.hasta ? e.hasta.toISOString() : null,
+    proximo_inicio: e.proximoInicio ? e.proximoInicio.toISOString() : null,
+  };
+}
+
+/**
+ * Sede en la que va a operar este dispositivo.
+ *
+ * Vendedor y auxiliar no eligen: la suya. Gerente y director pueden pedir una
+ * de su alcance; si no piden ninguna, la primera de las suyas (gerente) o la
+ * principal (director).
+ */
+async function resolverSedeActiva(alcance, sedeUuid, conn = null) {
+  if (sedeUuid) {
+    const sede = await sedePorUuid(conn, sedeUuid);
+    if (!sede || !sede.activo) throw notFound('Sede');
+    if (!veSede(alcance, sede.id)) {
+      throw forbidden('No puedes operar en esa sede', 'SEDE_FUERA_DE_ALCANCE');
+    }
+    return sede;
+  }
+  if (alcance.esDirector) return sedePrincipal(conn);
+  const sedes = await sedesDeAlcance(alcance, conn);
+  return sedes.find((s) => s.activo) ?? null;
+}
+
+export async function login({ email, password, dispositivo, sede_uuid: sedeUuid }, userAgent) {
   const usuario = await queryOne(
-    'SELECT id, uuid, nombre, email, password_hash, rol, activo FROM usuarios WHERE email = ? AND deleted_at IS NULL',
+    `SELECT ${COLUMNAS_USUARIO} FROM usuarios WHERE email = ? AND deleted_at IS NULL`,
     [email],
   );
 
@@ -138,8 +197,34 @@ export async function login({ email, password, dispositivo }, userAgent) {
   if (!usuario || !valida) throw unauthorized('Correo o contraseña incorrectos', 'CREDENCIALES_INVALIDAS');
   if (!usuario.activo) throw unauthorized('La cuenta está desactivada', 'CUENTA_DESACTIVADA');
 
+  const alcance = await cargarAlcance(usuario);
+
+  // El intento fuera de turno se registra: es justo lo que un gerente quiere
+  // saber («¿quién intentó entrar el domingo a las 11 de la noche?»).
+  const evaluacion = evaluarJornada(jornadaDe(usuario), new Date(), env.BUSINESS_TIMEZONE);
+  if (!evaluacion.permitido) {
+    await registrarAuditoria(null, {
+      usuarioId: usuario.id,
+      sedeId: alcance.sedeIds[0] ?? null,
+      dispositivoUuid: dispositivo?.uuid,
+      accion: ACCIONES.INGRESO_FUERA_DE_HORARIO,
+      entidad: 'usuarios',
+      entidadUuid: usuario.uuid,
+    });
+    throw fueraDeHorario(evaluacion);
+  }
+
+  const sedeActiva = await resolverSedeActiva(alcance, sedeUuid);
+  if (!sedeActiva) {
+    throw new ApiError(
+      403,
+      'SIN_SEDE',
+      'Tu cuenta no tiene una sede asignada. Pide a tu gerente que te asigne una.',
+    );
+  }
+
   return withTransaction(async (conn) => {
-    const prefijoFolio = await registrarDispositivo(conn, dispositivo, usuario.id);
+    const prefijoFolio = await registrarDispositivo(conn, dispositivo, usuario.id, sedeActiva.id);
     const familia = nuevoUuid();
     const { token: refreshToken, expira } = await emitirRefreshToken(
       conn,
@@ -159,12 +244,44 @@ export async function login({ email, password, dispositivo }, userAgent) {
       refresh_expira: expira.toISOString(),
       usuario: perfilPublico(usuario),
       dispositivo: dispositivo ? { uuid: dispositivo.uuid, prefijo_folio: prefijoFolio } : null,
+      sedes: (await sedesDeAlcance(alcance, conn)).map(sedePublica),
+      sede_activa: sedeActiva.uuid,
+      jornada: jornadaPublica(usuario),
       // El cliente usa esto para saber cuántos días puede operar sin volver a
       // ver al servidor antes de exigir una reconexión.
       offline_grace_days: env.OFFLINE_GRACE_DAYS,
+      zona_negocio: env.BUSINESS_TIMEZONE,
       servidor_utc: new Date().toISOString(),
     };
   });
+}
+
+/**
+ * Cambia la sede en la que opera este dispositivo (gerente con varias sedes o
+ * director). Lo que se venda desde aquí en adelante es de esa sede.
+ */
+export async function cambiarSedeActiva(alcance, dispositivoUuid, sedeUuid) {
+  if (!dispositivoUuid) throw badRequest('SIN_DISPOSITIVO', 'Falta el encabezado X-Dispositivo');
+  const sede = await resolverSedeActiva(alcance, sedeUuid);
+  await query('UPDATE dispositivos SET sede_id = ? WHERE uuid = ?', [sede.id, dispositivoUuid]);
+  return { sede_activa: sede.uuid, sede: sedePublica(sede) };
+}
+
+/** Perfil, sedes y jornada del usuario autenticado. */
+export async function perfil(usuario, alcance, dispositivoUuid) {
+  const sedeDispositivo = dispositivoUuid
+    ? await queryOne(
+        'SELECT s.uuid FROM dispositivos d JOIN sedes s ON s.id = d.sede_id WHERE d.uuid = ?',
+        [dispositivoUuid],
+      )
+    : null;
+  return {
+    usuario: perfilPublico(usuario),
+    sedes: (await sedesDeAlcance(alcance)).map(sedePublica),
+    sede_activa: sedeDispositivo?.uuid ?? null,
+    jornada: jornadaPublica(usuario),
+    servidor_utc: new Date().toISOString(),
+  };
 }
 
 /**
@@ -193,7 +310,8 @@ export async function refrescar({ refresh_token: recibido, dispositivo }, userAg
       const fila = await txQueryOne(
         conn,
         `SELECT rt.id, rt.usuario_id, rt.familia, rt.expires_at, rt.revoked_at,
-                u.uuid, u.nombre, u.email, u.rol, u.activo
+                u.uuid, u.nombre, u.email, u.rol, u.activo,
+                u.restringir_horario, u.horario, u.acceso_extra_hasta
            FROM refresh_tokens rt
            JOIN usuarios u ON u.id = rt.usuario_id
           WHERE rt.token_hash = ?
@@ -212,6 +330,13 @@ export async function refrescar({ refresh_token: recibido, dispositivo }, userAg
         throw unauthorized('El refresh token expiró', 'REFRESH_EXPIRADO');
       }
       if (!fila.activo) throw unauthorized('La cuenta está desactivada', 'CUENTA_DESACTIVADA');
+
+      // Con gracia: el último envío tras el fin del turno puede necesitar un
+      // token nuevo. Pasado ese margen, la sesión no se renueva.
+      const ahora = new Date();
+      if (!permitidoConGracia(jornadaDe(fila), ahora, env.BUSINESS_TIMEZONE, GRACIA_CIERRE_TURNO_MIN)) {
+        throw fueraDeHorario(evaluarJornada(jornadaDe(fila), ahora, env.BUSINESS_TIMEZONE));
+      }
 
       await txExecute(conn, 'UPDATE refresh_tokens SET revoked_at = UTC_TIMESTAMP(3) WHERE id = ?', [
         fila.id,
@@ -283,90 +408,5 @@ export async function cambiarPassword(usuarioId, { password_actual, password_nue
   });
 }
 
-// ── Gestión de usuarios (sólo ADMIN) ────────────────────────────────────────
-
-export async function listarUsuarios() {
-  return query(
-    `SELECT uuid, nombre, email, rol, activo, telefono, ultimo_acceso, created_at, updated_at
-       FROM usuarios WHERE deleted_at IS NULL ORDER BY nombre`,
-  );
-}
-
-export async function crearUsuario(datos) {
-  const uuid = datos.uuid ?? nuevoUuid();
-  await query(
-    `INSERT INTO usuarios (uuid, nombre, email, password_hash, rol, telefono)
-     VALUES (?,?,?,?,?,?)`,
-    [uuid, datos.nombre, datos.email, await hashearPassword(datos.password), datos.rol, datos.telefono ?? null],
-  );
-  return queryOne(
-    'SELECT uuid, nombre, email, rol, activo, telefono, created_at FROM usuarios WHERE uuid = ?',
-    [uuid],
-  );
-}
-
-export async function actualizarUsuario(uuid, datos, solicitanteId) {
-  const usuario = await queryOne('SELECT id FROM usuarios WHERE uuid = ? AND deleted_at IS NULL', [uuid]);
-  if (!usuario) throw notFound('Usuario');
-
-  const campos = [];
-  const valores = [];
-  for (const clave of ['nombre', 'email', 'rol', 'telefono']) {
-    if (datos[clave] !== undefined) {
-      campos.push(`${clave} = ?`);
-      valores.push(datos[clave]);
-    }
-  }
-  if (datos.activo !== undefined) {
-    if (usuario.id === solicitanteId && datos.activo === false) {
-      throw badRequest('AUTO_DESACTIVACION', 'No puedes desactivar tu propia cuenta');
-    }
-    campos.push('activo = ?');
-    valores.push(datos.activo ? 1 : 0);
-  }
-  if (datos.password !== undefined) {
-    campos.push('password_hash = ?');
-    valores.push(await hashearPassword(datos.password));
-  }
-  if (!campos.length) throw badRequest('SIN_CAMBIOS', 'No se envió ningún campo a modificar');
-
-  valores.push(usuario.id);
-  await query(`UPDATE usuarios SET ${campos.join(', ')} WHERE id = ?`, valores);
-
-  if (datos.activo === false || datos.password !== undefined) {
-    await query(
-      'UPDATE refresh_tokens SET revoked_at = UTC_TIMESTAMP(3) WHERE usuario_id = ? AND revoked_at IS NULL',
-      [usuario.id],
-    );
-  }
-
-  return queryOne(
-    'SELECT uuid, nombre, email, rol, activo, telefono, updated_at FROM usuarios WHERE id = ?',
-    [usuario.id],
-  );
-}
-
-export async function eliminarUsuario(uuid, solicitanteId) {
-  const usuario = await queryOne('SELECT id FROM usuarios WHERE uuid = ? AND deleted_at IS NULL', [uuid]);
-  if (!usuario) throw notFound('Usuario');
-  if (usuario.id === solicitanteId) {
-    throw badRequest('AUTO_ELIMINACION', 'No puedes eliminar tu propia cuenta');
-  }
-
-  const [{ n }] = await query(
-    "SELECT COUNT(*) n FROM usuarios WHERE rol = 'ADMIN' AND activo = 1 AND deleted_at IS NULL",
-  );
-  const esAdmin = await queryOne("SELECT 1 x FROM usuarios WHERE id = ? AND rol = 'ADMIN'", [usuario.id]);
-  if (esAdmin && n <= 1) {
-    throw conflict('ULTIMO_ADMIN', 'No puedes eliminar al único administrador activo');
-  }
-
-  // Borrado lógico: las ventas y movimientos históricos deben seguir
-  // apuntando a quién los hizo.
-  await query('UPDATE usuarios SET deleted_at = UTC_TIMESTAMP(3), activo = 0 WHERE id = ?', [usuario.id]);
-  await query(
-    'UPDATE refresh_tokens SET revoked_at = UTC_TIMESTAMP(3) WHERE usuario_id = ? AND revoked_at IS NULL',
-    [usuario.id],
-  );
-  return { ok: true };
-}
+// La gestión de cuentas (crear, editar, habilitar, horarios, sedes) vive en
+// src/modules/empleados.

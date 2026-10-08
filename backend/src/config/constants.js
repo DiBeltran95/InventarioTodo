@@ -1,9 +1,44 @@
 /** Constantes de dominio compartidas por todos los módulos. */
 
+/**
+ * Roles.
+ *
+ * `ADMIN` es el **Director General**: ve y gestiona todas las sedes. Se conserva
+ * el valor 'ADMIN' en la base para no migrar filas y para que la app vieja lo
+ * siga reconociendo como administrador.
+ */
 export const ROLES = Object.freeze({
   ADMIN: 'ADMIN',
+  GERENTE: 'GERENTE',
+  AUXILIAR_INVENTARIO: 'AUXILIAR_INVENTARIO',
   VENDEDOR: 'VENDEDOR',
 });
+
+export const TODOS_LOS_ROLES = Object.freeze(Object.values(ROLES));
+
+/** Director o gerente: gestionan catálogo, stock y personal (en su alcance). */
+export const ROLES_GESTORES = Object.freeze([ROLES.ADMIN, ROLES.GERENTE]);
+
+/** Quién puede cobrar. El auxiliar de inventario no vende. */
+export const ROLES_QUE_VENDEN = Object.freeze([ROLES.ADMIN, ROLES.GERENTE, ROLES.VENDEDOR]);
+
+/** Quién carga mercancía que llega del proveedor. */
+export const ROLES_QUE_REGISTRAN_ENTRADAS = Object.freeze([
+  ROLES.ADMIN,
+  ROLES.GERENTE,
+  ROLES.AUXILIAR_INVENTARIO,
+]);
+
+/** Roles que pertenecen a exactamente una sede. */
+export const ROLES_DE_UNA_SEDE = Object.freeze([ROLES.VENDEDOR, ROLES.AUXILIAR_INVENTARIO]);
+
+/**
+ * Minutos tras el fin del turno durante los que todavía se acepta subir la cola.
+ * Al terminar el turno la app intenta un último envío antes de cerrar sesión;
+ * sin este margen, una venta cobrada a las 5:59 se quedaría en el teléfono
+ * hasta el día siguiente.
+ */
+export const GRACIA_CIERRE_TURNO_MIN = 15;
 
 /** Tipos de movimiento y el signo que la aplicación debe imponer a `cantidad`. */
 export const TIPOS_MOVIMIENTO = Object.freeze({
@@ -14,7 +49,7 @@ export const TIPOS_MOVIMIENTO = Object.freeze({
   SALIDA: -1,
   VENTA: -1,
   MERMA: -1,
-  TRASLADO: -1,
+  TRASLADO: 0, // el signo lo pone el servidor: − en la sede origen, + en la destino
   AJUSTE: 0, // el signo lo decide el usuario
 });
 
@@ -80,9 +115,25 @@ export const OPERACIONES_PUSH = Object.freeze([
   'PROVEEDOR_CREAR',
   'PROVEEDOR_ACTUALIZAR',
   'PROVEEDOR_ELIMINAR',
+  'METODO_PAGO_CREAR',
+  'METODO_PAGO_ACTUALIZAR',
+  'METODO_PAGO_ELIMINAR',
   'MOVIMIENTO_CREAR',
+  'CONTEO_AJUSTAR',
   'VENTA_CREAR',
   'VENTA_ANULAR',
+  'TRASLADO_CREAR',
+  'TRASLADO_APROBAR',
+  'TRASLADO_RECHAZAR',
+  'TRASLADO_CANCELAR',
+  'AJUSTE_SOLICITAR',
+  'AJUSTE_APROBAR',
+  'AJUSTE_RECHAZAR',
+  'CIERRE_ABRIR',
+  'CIERRE_CERRAR',
+  'CIERRE_REVISAR',
+  'RECAUDO_CREAR',
+  'STOCK_MINIMO_FIJAR',
 ]);
 
 /** El prefijo `inv://p/{uuid}` identifica un QR emitido por esta app. */

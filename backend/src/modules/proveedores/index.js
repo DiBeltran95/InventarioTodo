@@ -4,7 +4,7 @@ import { crearRepositorioSimple } from '../../db/simpleCrud.js';
 import { withTransaction } from '../../db/tx.js';
 import { validar } from '../../middleware/validate.js';
 import { autenticar } from '../../middleware/auth.js';
-import { soloAdmin } from '../../middleware/rbac.js';
+import { soloGestor } from '../../middleware/rbac.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ok, creado, lista } from '../../utils/responder.js';
 
@@ -49,7 +49,7 @@ router.get(
 
 router.post(
   '/',
-  soloAdmin,
+  soloGestor,
   validar({ body: cuerpoCrear }),
   asyncHandler(async (req, res) =>
     creado(res, await withTransaction((c) => repoProveedores.crear(c, req.body))),
@@ -58,7 +58,7 @@ router.post(
 
 router.patch(
   '/:uuid',
-  soloAdmin,
+  soloGestor,
   validar({ params: paramUuid, body: cuerpoActualizar }),
   asyncHandler(async (req, res) =>
     ok(res, await withTransaction((c) => repoProveedores.actualizar(c, req.params.uuid, req.body))),
@@ -67,7 +67,7 @@ router.patch(
 
 router.delete(
   '/:uuid',
-  soloAdmin,
+  soloGestor,
   validar({ params: paramUuid }),
   asyncHandler(async (req, res) =>
     ok(res, await withTransaction((c) => repoProveedores.eliminar(c, req.params.uuid))),

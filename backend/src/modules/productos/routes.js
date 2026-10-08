@@ -4,21 +4,24 @@ import * as servicio from './service.js';
 import * as esquemas from './schemas.js';
 import { withTransaction } from '../../db/tx.js';
 import { validar } from '../../middleware/validate.js';
+import { resolverSede } from '../../middleware/sede.js';
 import { autenticar } from '../../middleware/auth.js';
-import { soloAdmin, ocultarCostos } from '../../middleware/rbac.js';
+import { soloGestor, ocultarCostos } from '../../middleware/rbac.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ok, creado, paginado } from '../../utils/responder.js';
 import { notFound } from '../../utils/ApiError.js';
 import { QR_PREFIX } from '../../config/constants.js';
 
 const router = Router();
-router.use(autenticar);
+router.use(autenticar, resolverSede(false));
 
 const contexto = (req) => ({
   usuarioId: req.usuario.id,
   usuarioUuid: req.usuario.uuid,
   dispositivoUuid: req.dispositivoUuid,
   rol: req.usuario.rol,
+  alcance: req.alcance,
+  sedeId: req.sedeId,
 });
 
 router.get(
@@ -71,7 +74,7 @@ router.get(
 
 router.post(
   '/',
-  soloAdmin,
+  soloGestor,
   validar({ body: esquemas.crearProductoSchema }),
   asyncHandler(async (req, res) => {
     const producto = await withTransaction((c) => servicio.crearProducto(c, req.body, contexto(req)));
@@ -81,7 +84,7 @@ router.post(
 
 router.patch(
   '/:uuid',
-  soloAdmin,
+  soloGestor,
   validar({ params: esquemas.paramUuid, body: esquemas.actualizarProductoSchema }),
   asyncHandler(async (req, res) => {
     ok(
@@ -95,7 +98,7 @@ router.patch(
 
 router.delete(
   '/:uuid',
-  soloAdmin,
+  soloGestor,
   validar({ params: esquemas.paramUuid }),
   asyncHandler(async (req, res) => {
     ok(res, await withTransaction((c) => servicio.eliminarProducto(c, req.params.uuid, contexto(req))));
@@ -104,7 +107,7 @@ router.delete(
 
 router.post(
   '/:uuid/codigos',
-  soloAdmin,
+  soloGestor,
   validar({ params: esquemas.paramUuid, body: esquemas.codigoSchema }),
   asyncHandler(async (req, res) => {
     creado(
@@ -116,7 +119,7 @@ router.post(
 
 router.delete(
   '/codigos/:uuid',
-  soloAdmin,
+  soloGestor,
   validar({ params: z.object({ uuid: z.string().uuid() }) }),
   asyncHandler(async (req, res) => {
     ok(res, await withTransaction((c) => servicio.eliminarCodigo(c, req.params.uuid, contexto(req))));

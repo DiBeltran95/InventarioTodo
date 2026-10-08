@@ -3,20 +3,23 @@ import { z } from 'zod';
 import * as servicio from './service.js';
 import { withTransaction } from '../../db/tx.js';
 import { validar } from '../../middleware/validate.js';
+import { resolverSede } from '../../middleware/sede.js';
 import { autenticar } from '../../middleware/auth.js';
-import { soloAdmin, ocultarCostos } from '../../middleware/rbac.js';
+import { soloGestor, soloDirector, ocultarCostos } from '../../middleware/rbac.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ok, creado, paginado, lista } from '../../utils/responder.js';
 import { dinero, cantidad } from '../productos/schemas.js';
 
 const router = Router();
-router.use(autenticar);
+router.use(autenticar, resolverSede(false));
 
 const contexto = (req) => ({
   usuarioId: req.usuario.id,
   usuarioUuid: req.usuario.uuid,
   dispositivoUuid: req.dispositivoUuid,
   rol: req.usuario.rol,
+  alcance: req.alcance,
+  sedeId: req.sedeId,
 });
 
 /** Sólo tipos manuales: VENTA y ANULACION_VENTA los genera el módulo de ventas. */
@@ -81,7 +84,8 @@ router.get(
  */
 router.post(
   '/movimientos',
-  soloAdmin,
+  soloGestor,
+  resolverSede(true),
   validar({ body: movimientoSchema }),
   asyncHandler(async (req, res) => {
     creado(res, await withTransaction((c) => servicio.crearMovimiento(c, req.body, contexto(req))));
@@ -96,7 +100,8 @@ router.post(
  */
 router.post(
   '/conteo',
-  soloAdmin,
+  soloGestor,
+  resolverSede(true),
   validar({ body: conteoSchema }),
   asyncHandler(async (req, res) => {
     ok(res, await withTransaction((c) => servicio.ajustarPorConteo(c, req.body, contexto(req))));
@@ -126,12 +131,12 @@ router.post(
 );
 
 /**
- * Recalcula stock_actual desde el libro de movimientos.
- * Operación de mantenimiento; sólo ADMIN.
+ * Recalcula el stock (de cada sede y el total) desde el libro de movimientos.
+ * Mantenimiento que toca todas las sedes: sólo el Director General.
  */
 router.post(
   '/recalcular',
-  soloAdmin,
+  soloDirector,
   validar({ body: z.object({ producto_uuid: z.string().uuid().nullish() }).default({}) }),
   asyncHandler(async (req, res) => {
     ok(res, await servicio.recalcularStock(req.body?.producto_uuid ?? null));

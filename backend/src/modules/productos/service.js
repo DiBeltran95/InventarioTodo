@@ -4,6 +4,7 @@ import { nuevoUuid } from '../../utils/ids.js';
 import { notFound, badRequest, conflict } from '../../utils/ApiError.js';
 import { QR_PREFIX } from '../../config/constants.js';
 import { diaHabil } from '../../utils/dates.js';
+import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
 
 const COLUMNAS = `
   p.uuid, p.sku, p.nombre, p.descripcion, p.unidad_medida,
@@ -200,12 +201,15 @@ export async function crearProducto(conn, datos, ctx) {
     await txExecute(
       conn,
       `INSERT INTO movimientos_inventario
-         (uuid, producto_id, tipo, cantidad, costo_unitario, usuario_id, dispositivo_uuid,
+         (uuid, producto_id, sede_id, tipo, cantidad, costo_unitario, usuario_id, dispositivo_uuid,
           motivo, fecha, fecha_local, creado_offline)
-       VALUES (?,?, 'INICIAL', ?,?,?,?, 'Existencia inicial', UTC_TIMESTAMP(3), ?, 0)`,
+       VALUES (?,?,?, 'INICIAL', ?,?,?,?, 'Existencia inicial', UTC_TIMESTAMP(3), ?, 0)`,
       [
         nuevoUuid(),
         productoId,
+        // La existencia inicial está en la sede de quien da de alta el
+        // producto. Sin sede (cliente viejo) el trigger usa la del dispositivo.
+        ctx?.sedeId ?? null,
         datos.stock_inicial,
         datos.precio_compra ?? null,
         ctx?.usuarioId ?? null,
@@ -218,8 +222,12 @@ export async function crearProducto(conn, datos, ctx) {
   return obtenerProductoTx(conn, uuid);
 }
 
-export async function actualizarProducto(conn, uuid, datos, _ctx) {
-  const producto = await txQueryOne(conn, 'SELECT id FROM productos WHERE uuid = ?', [uuid]);
+export async function actualizarProducto(conn, uuid, datos, ctx) {
+  const producto = await txQueryOne(
+    conn,
+    'SELECT id, nombre, precio_compra, precio_venta, stock_minimo FROM productos WHERE uuid = ?',
+    [uuid],
+  );
   if (!producto) throw notFound('Producto');
 
   const asignaciones = [];
@@ -260,12 +268,83 @@ export async function actualizarProducto(conn, uuid, datos, _ctx) {
   valores.push(producto.id);
   await txExecute(conn, `UPDATE productos SET ${asignaciones.join(', ')} WHERE id = ?`, valores);
 
+  // Un cambio de precio es de lo primero que se revisa cuando la caja no
+  // cuadra: «¿quién bajó el precio antes de vender?».
+  // Comparación por valor: la app puede mandar '1000' y la base guardar
+  // '1000.00'; eso no es un cambio de precio. Number basta para igualdad de
+  // decimales de dos o tres cifras; aquí no se opera con el valor.
+  const cambia = (campo) =>
+    datos[campo] !== undefined && Number(datos[campo]) !== Number(producto[campo]);
+  if (cambia('precio_venta') || cambia('precio_compra')) {
+    await registrarAuditoria(conn, {
+      usuarioId: ctx?.usuarioId,
+      sedeId: ctx?.sedeId,
+      dispositivoUuid: ctx?.dispositivoUuid,
+      accion: ACCIONES.PRECIO_CAMBIADO,
+      entidad: 'productos',
+      entidadUuid: uuid,
+      antes: { precio_venta: producto.precio_venta, precio_compra: producto.precio_compra },
+      despues: {
+        nombre: producto.nombre,
+        precio_venta: datos.precio_venta ?? producto.precio_venta,
+        precio_compra: datos.precio_compra ?? producto.precio_compra,
+      },
+    });
+  }
+
+  // El mínimo general lo heredan las sedes que no tienen uno propio. Tocar su
+  // fila de stock dispara el trigger que abre o cierra la alerta STOCK_BAJO:
+  // sin esto, subir el mínimo no avisaría hasta el próximo movimiento.
+  if (cambia('stock_minimo')) {
+    await txExecute(
+      conn,
+      'UPDATE stock_sedes SET updated_at = UTC_TIMESTAMP(3) WHERE producto_id = ? AND stock_minimo IS NULL',
+      [producto.id],
+    );
+  }
+
   return obtenerProductoTx(conn, uuid);
 }
 
-export async function eliminarProducto(conn, uuid, _ctx) {
-  const producto = await txQueryOne(conn, 'SELECT id, stock_actual FROM productos WHERE uuid = ?', [uuid]);
+/**
+ * Mínimo de stock propio de una sede (null = vuelve a usar el general).
+ * Cada sede puede necesitar uno distinto: la del centro vende el triple.
+ */
+export async function fijarStockMinimo(conn, datos, ctx) {
+  const producto = await txQueryOne(conn, 'SELECT id FROM productos WHERE uuid = ? AND deleted_at IS NULL', [
+    datos.producto_uuid,
+  ]);
   if (!producto) throw notFound('Producto');
+  const sedeId = ctx?.sedeId;
+  if (!sedeId) throw badRequest('SIN_SEDE', 'Falta la sede');
+
+  await txExecute(
+    conn,
+    `INSERT INTO stock_sedes (producto_id, sede_id, stock_actual, stock_minimo)
+     VALUES (?, ?, 0, ?)
+     ON DUPLICATE KEY UPDATE stock_minimo = VALUES(stock_minimo)`,
+    [producto.id, sedeId, datos.stock_minimo ?? null],
+  );
+  return { producto_uuid: datos.producto_uuid, stock_minimo: datos.stock_minimo ?? null };
+}
+
+export async function eliminarProducto(conn, uuid, ctx) {
+  const producto = await txQueryOne(
+    conn,
+    'SELECT id, nombre, sku, stock_actual FROM productos WHERE uuid = ?',
+    [uuid],
+  );
+  if (!producto) throw notFound('Producto');
+
+  await registrarAuditoria(conn, {
+    usuarioId: ctx?.usuarioId,
+    sedeId: ctx?.sedeId,
+    dispositivoUuid: ctx?.dispositivoUuid,
+    accion: ACCIONES.PRODUCTO_ELIMINADO,
+    entidad: 'productos',
+    entidadUuid: uuid,
+    antes: { nombre: producto.nombre, sku: producto.sku, stock_total: producto.stock_actual },
+  });
 
   await txExecute(
     conn,

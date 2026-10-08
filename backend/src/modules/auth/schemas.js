@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { ROLES } from '../../config/constants.js';
 
 export const dispositivoSchema = z.object({
   uuid: z.string().uuid(),
@@ -12,7 +11,11 @@ export const loginSchema = z.object({
   email: z.string().email().max(191).toLowerCase().trim(),
   password: z.string().min(1).max(200),
   dispositivo: dispositivoSchema.optional(),
+  // Sólo gerente con varias sedes o director: en cuál va a operar.
+  sede_uuid: z.string().uuid().optional(),
 });
+
+export const sedeActivaSchema = z.object({ sede_uuid: z.string().uuid() });
 
 export const refreshSchema = z.object({
   refresh_token: z.string().min(20).max(500),
@@ -37,24 +40,6 @@ export const passwordSchema = z
 export const cambiarPasswordSchema = z.object({
   password_actual: z.string().min(1).max(200),
   password_nueva: passwordSchema,
-});
-
-export const crearUsuarioSchema = z.object({
-  uuid: z.string().uuid().optional(),
-  nombre: z.string().min(2).max(120).trim(),
-  email: z.string().email().max(191).toLowerCase().trim(),
-  password: passwordSchema,
-  rol: z.enum([ROLES.ADMIN, ROLES.VENDEDOR]).default(ROLES.VENDEDOR),
-  telefono: z.string().max(30).optional().nullable(),
-});
-
-export const actualizarUsuarioSchema = z.object({
-  nombre: z.string().min(2).max(120).trim().optional(),
-  email: z.string().email().max(191).toLowerCase().trim().optional(),
-  rol: z.enum([ROLES.ADMIN, ROLES.VENDEDOR]).optional(),
-  telefono: z.string().max(30).optional().nullable(),
-  activo: z.boolean().optional(),
-  password: passwordSchema.optional(),
 });
 
 export const uuidParamSchema = z.object({ uuid: z.string().uuid() });

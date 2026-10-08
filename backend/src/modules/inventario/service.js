@@ -1,5 +1,6 @@
 import { query } from '../../db/pool.js';
 import { txQueryOne, txExecute } from '../../db/tx.js';
+import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
 import { nuevoUuid } from '../../utils/ids.js';
 import { notFound, badRequest, conflict } from '../../utils/ApiError.js';
 import { TIPOS_MOVIMIENTO } from '../../config/constants.js';
@@ -58,11 +59,31 @@ export async function bloquearProductos(conn, uuids) {
 }
 
 /**
- * Inserta un movimiento en el libro. NO actualiza `productos.stock_actual`:
- * de eso se encargan los triggers (ver database/schema.sql §15). Duplicar esa
- * actualización aquí descuadraría el stock al doble.
+ * Stock de un producto en una sede, leído DESPUÉS de bloquear el producto.
+ *
+ * El bloqueo es sobre la fila de `productos` (FOR UPDATE en bloquearProducto),
+ * que serializa todos los movimientos de ese producto en cualquier sede. Así la
+ * lectura de `stock_sedes` que sigue no puede quedar vieja a mitad de la
+ * transacción.
+ */
+export async function stockEnSede(conn, productoId, sedeId) {
+  const fila = await txQueryOne(
+    conn,
+    'SELECT stock_actual FROM stock_sedes WHERE producto_id = ? AND sede_id = ?',
+    [productoId, sedeId],
+  );
+  return fila ? fila.stock_actual : '0.000';
+}
+
+/**
+ * Inserta un movimiento en el libro. NO actualiza el stock: de eso se encargan
+ * los triggers (migrations/002_multisede.sql), que mantienen el de la sede y el
+ * total. Duplicar esa actualización aquí descuadraría el stock al doble.
  *
  * @param producto fila ya bloqueada con FOR UPDATE
+ * @param ctx      { usuarioId, dispositivoUuid, sedeId }. `datos.sede_id`
+ *                 prevalece: los traslados mueven stock de dos sedes en la
+ *                 misma operación.
  */
 export async function insertarMovimiento(conn, producto, datos, ctx) {
   const signo = TIPOS_MOVIMIENTO[datos.tipo];
@@ -71,18 +92,27 @@ export async function insertarMovimiento(conn, producto, datos, ctx) {
   const magnitud = toQty(datos.cantidad);
   if (magnitud === 0n) throw badRequest('CANTIDAD_CERO', 'La cantidad no puede ser cero');
 
-  // Para todos los tipos salvo AJUSTE, el signo lo impone el tipo: el cliente
-  // no puede convertir una VENTA en una entrada mandando cantidad positiva.
+  // Para todos los tipos salvo AJUSTE y TRASLADO, el signo lo impone el tipo:
+  // el cliente no puede convertir una VENTA en una entrada mandando cantidad
+  // positiva. En un traslado el signo lo pone el servidor (sale de una sede,
+  // entra en la otra) y nunca el cliente.
   const abs = magnitud < 0n ? -magnitud : magnitud;
   const cantidad = signo === 0 ? magnitud : BigInt(signo) * abs;
 
-  const stockPrevio = toQty(producto.stock_actual);
+  const sedeId = datos.sede_id ?? ctx?.sedeId ?? null;
+  if (!sedeId) throw badRequest('SIN_SEDE', 'El movimiento no tiene sede');
+
+  // Copia en memoria por sede, para movimientos encadenados del mismo producto
+  // dentro de la misma transacción (una venta con el mismo producto en dos
+  // líneas, o un traslado).
+  producto.stockSede ??= {};
+  const stockPrevio = toQty(producto.stockSede[sedeId] ?? (await stockEnSede(conn, producto.id, sedeId)));
   const stockNuevo = stockPrevio + cantidad;
 
   if (stockNuevo < 0n && !env.ALLOW_NEGATIVE_STOCK) {
     throw conflict(
       'STOCK_INSUFICIENTE',
-      `Stock insuficiente de "${producto.nombre}": hay ${fromQty(stockPrevio)} y se intentan sacar ${fromQty(-cantidad)}`,
+      `Stock insuficiente de "${producto.nombre}" en esta sede: hay ${fromQty(stockPrevio)} y se intentan sacar ${fromQty(-cantidad)}`,
       { producto_uuid: producto.uuid, disponible: fromQty(stockPrevio) },
     );
   }
@@ -91,7 +121,9 @@ export async function insertarMovimiento(conn, producto, datos, ctx) {
 
   // Idempotencia: reenvío de la cola offline con el mismo uuid de movimiento.
   const yaExiste = await txQueryOne(conn, 'SELECT id FROM movimientos_inventario WHERE uuid = ?', [uuid]);
-  if (yaExiste) return { uuid, duplicado: true, stock_resultante: producto.stock_actual };
+  if (yaExiste) {
+    return { uuid, id: yaExiste.id, duplicado: true, stock_resultante: fromQty(stockPrevio), sede_id: sedeId };
+  }
 
   let proveedorId = null;
   if (datos.proveedor_uuid) {
@@ -103,23 +135,26 @@ export async function insertarMovimiento(conn, producto, datos, ctx) {
   const fecha = datos.fecha ? new Date(datos.fecha) : new Date();
   if (Number.isNaN(fecha.getTime())) throw badRequest('FECHA_INVALIDA', 'La fecha del movimiento no es válida');
 
-  await txExecute(
+  const r = await txExecute(
     conn,
     `INSERT INTO movimientos_inventario
-       (uuid, producto_id, tipo, cantidad, costo_unitario, precio_unitario,
-        venta_id, proveedor_id, usuario_id, dispositivo_uuid,
+       (uuid, producto_id, sede_id, tipo, cantidad, costo_unitario, precio_unitario,
+        venta_id, traslado_id, proveedor_id, usuario_id, aprobado_por, dispositivo_uuid,
         lote, vence_el, documento_ref, motivo, fecha, fecha_local, creado_offline)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       uuid,
       producto.id,
+      sedeId,
       datos.tipo,
       fromQty(cantidad),
       datos.costo_unitario ?? null,
       datos.precio_unitario ?? null,
       datos.venta_id ?? null,
+      datos.traslado_id ?? null,
       proveedorId,
-      ctx?.usuarioId ?? null,
+      datos.usuario_id ?? ctx?.usuarioId ?? null,
+      datos.aprobado_por ?? null,
       ctx?.dispositivoUuid ?? null,
       datos.lote ?? null,
       datos.vence_el ?? null,
@@ -131,9 +166,7 @@ export async function insertarMovimiento(conn, producto, datos, ctx) {
     ],
   );
 
-  // Mantiene coherente la copia en memoria para movimientos encadenados sobre
-  // el mismo producto dentro de la misma transacción.
-  producto.stock_actual = fromQty(stockNuevo);
+  producto.stockSede[sedeId] = fromQty(stockNuevo);
 
   if (stockNuevo < 0n) {
     await registrarAlerta(conn, {
@@ -141,19 +174,35 @@ export async function insertarMovimiento(conn, producto, datos, ctx) {
       severidad: 'CRITICA',
       productoId: producto.id,
       ventaId: datos.venta_id ?? null,
+      sedeId,
       mensaje: `"${producto.nombre}" quedó en ${fromQty(stockNuevo)}. Probable venta sin conexión sobre existencias agotadas.`,
     });
   }
 
-  return { uuid, stock_resultante: fromQty(stockNuevo), stock_anterior: fromQty(stockPrevio) };
+  return {
+    uuid,
+    id: r.insertId,
+    sede_id: sedeId,
+    stock_resultante: fromQty(stockNuevo),
+    stock_anterior: fromQty(stockPrevio),
+  };
 }
 
-export async function registrarAlerta(conn, { tipo, severidad, productoId, ventaId, mensaje, detalle }) {
+export async function registrarAlerta(conn, { tipo, severidad, productoId, ventaId, sedeId, mensaje, detalle }) {
   await txExecute(
     conn,
-    `INSERT INTO alertas (uuid, tipo, severidad, producto_id, venta_id, mensaje, detalle)
-     VALUES (?,?,?,?,?,?,?)`,
-    [nuevoUuid(), tipo, severidad ?? 'ADVERTENCIA', productoId ?? null, ventaId ?? null, mensaje, detalle ? JSON.stringify(detalle) : null],
+    `INSERT INTO alertas (uuid, tipo, severidad, producto_id, sede_id, venta_id, mensaje, detalle)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [
+      nuevoUuid(),
+      tipo,
+      severidad ?? 'ADVERTENCIA',
+      productoId ?? null,
+      sedeId ?? null,
+      ventaId ?? null,
+      mensaje,
+      detalle ? JSON.stringify(detalle) : null,
+    ],
   );
 }
 
@@ -173,6 +222,31 @@ export async function crearMovimiento(conn, datos, ctx) {
     ]);
   }
 
+  // Toda alteración manual del stock queda en la auditoría: es lo que el
+  // Director General revisa para ver qué movieron gerentes y auxiliares.
+  if (!resultado.duplicado) {
+    await registrarAuditoria(conn, {
+      usuarioId: ctx?.usuarioId,
+      sedeId: resultado.sede_id,
+      dispositivoUuid: ctx?.dispositivoUuid,
+      accion:
+        datos.tipo === 'ENTRADA' || datos.tipo === 'INICIAL'
+          ? ACCIONES.ENTRADA_REGISTRADA
+          : datos.tipo === 'MERMA'
+            ? ACCIONES.MERMA_REGISTRADA
+            : ACCIONES.STOCK_AJUSTADO,
+      entidad: 'productos',
+      entidadUuid: producto.uuid,
+      antes: { stock: resultado.stock_anterior },
+      despues: {
+        stock: resultado.stock_resultante,
+        tipo: datos.tipo,
+        cantidad: datos.cantidad,
+        motivo: datos.motivo ?? null,
+      },
+    });
+  }
+
   return {
     ...resultado,
     producto: { uuid: producto.uuid, sku: producto.sku, nombre: producto.nombre },
@@ -187,12 +261,14 @@ export async function crearMovimiento(conn, datos, ctx) {
  */
 export async function ajustarPorConteo(conn, datos, ctx) {
   const producto = await bloquearProducto(conn, datos.producto_uuid);
-  const actual = toQty(producto.stock_actual);
+  const sedeId = datos.sede_id ?? ctx?.sedeId;
+  // Contra el stock de ESTA sede: el conteo físico es de los estantes de aquí.
+  const actual = toQty(await stockEnSede(conn, producto.id, sedeId));
   const contado = toQty(datos.stock_contado);
   const delta = contado - actual;
 
   if (delta === 0n) {
-    return { sin_cambios: true, stock_actual: producto.stock_actual, producto: { uuid: producto.uuid, nombre: producto.nombre } };
+    return { sin_cambios: true, stock_actual: fromQty(actual), producto: { uuid: producto.uuid, nombre: producto.nombre } };
   }
 
   const resultado = await insertarMovimiento(
@@ -202,12 +278,28 @@ export async function ajustarPorConteo(conn, datos, ctx) {
       uuid: datos.uuid,
       tipo: 'AJUSTE',
       cantidad: fromQty(delta),
+      sede_id: sedeId,
+      usuario_id: datos.usuario_id,
+      aprobado_por: datos.aprobado_por,
       motivo: datos.motivo ?? `Conteo físico: ${fromQty(actual)} -> ${fromQty(contado)}`,
       fecha: datos.fecha,
       creado_offline: datos.creado_offline,
     },
     ctx,
   );
+
+  if (!resultado.duplicado) {
+    await registrarAuditoria(conn, {
+      usuarioId: ctx?.usuarioId,
+      sedeId,
+      dispositivoUuid: ctx?.dispositivoUuid,
+      accion: ACCIONES.STOCK_AJUSTADO,
+      entidad: 'productos',
+      entidadUuid: producto.uuid,
+      antes: { stock: fromQty(actual) },
+      despues: { stock: fromQty(contado), motivo: datos.motivo ?? 'Conteo físico' },
+    });
+  }
 
   return {
     ...resultado,

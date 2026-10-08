@@ -3,19 +3,22 @@ import * as servicio from './service.js';
 import * as esquemas from './schemas.js';
 import { withTransaction } from '../../db/tx.js';
 import { validar } from '../../middleware/validate.js';
+import { resolverSede } from '../../middleware/sede.js';
 import { autenticar } from '../../middleware/auth.js';
-import { soloAdmin, ocultarCostos } from '../../middleware/rbac.js';
+import { soloGestor, ocultarCostos } from '../../middleware/rbac.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ok, creado, paginado } from '../../utils/responder.js';
 
 const router = Router();
-router.use(autenticar);
+router.use(autenticar, resolverSede(false));
 
 const contexto = (req) => ({
   usuarioId: req.usuario.id,
   usuarioUuid: req.usuario.uuid,
   dispositivoUuid: req.dispositivoUuid,
   rol: req.usuario.rol,
+  alcance: req.alcance,
+  sedeId: req.sedeId,
 });
 
 router.get(
@@ -54,7 +57,7 @@ router.post(
 /** Anular emite un documento de reversa; la venta original nunca se borra. */
 router.post(
   '/:uuid/anular',
-  soloAdmin,
+  soloGestor,
   validar({ params: esquemas.paramUuid, body: esquemas.anularVentaSchema }),
   asyncHandler(async (req, res) => {
     ok(

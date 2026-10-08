@@ -3,7 +3,6 @@ import * as servicio from './service.js';
 import * as esquemas from './schemas.js';
 import { validar } from '../../middleware/validate.js';
 import { autenticar } from '../../middleware/auth.js';
-import { soloAdmin } from '../../middleware/rbac.js';
 import { limitadorLogin } from '../../middleware/rateLimit.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ok, creado } from '../../utils/responder.js';
@@ -42,21 +41,25 @@ router.post(
   }),
 );
 
-/** GET /auth/me — el cliente lo usa para validar la sesión al volver a tener red. */
+/** GET /auth/me — perfil, sedes y jornada. La app lo usa al volver a tener red. */
 router.get(
   '/me',
   autenticar,
   asyncHandler(async (req, res) => {
-    ok(res, {
-      usuario: {
-        uuid: req.usuario.uuid,
-        nombre: req.usuario.nombre,
-        email: req.usuario.email,
-        rol: req.usuario.rol,
-        activo: !!req.usuario.activo,
-      },
-      servidor_utc: new Date().toISOString(),
-    });
+    ok(res, await servicio.perfil(req.usuario, req.alcance, req.dispositivoUuid));
+  }),
+);
+
+/**
+ * POST /auth/sede-activa — el gerente con varias sedes (o el director) cambia
+ * la sede en la que opera este teléfono.
+ */
+router.post(
+  '/sede-activa',
+  autenticar,
+  validar({ body: esquemas.sedeActivaSchema }),
+  asyncHandler(async (req, res) => {
+    ok(res, await servicio.cambiarSedeActiva(req.alcance, req.dispositivoUuid, req.body.sede_uuid));
   }),
 );
 
@@ -69,45 +72,7 @@ router.post(
   }),
 );
 
-// ── Usuarios (ADMIN) ────────────────────────────────────────────────────────
-
-router.get(
-  '/usuarios',
-  autenticar,
-  soloAdmin,
-  asyncHandler(async (_req, res) => {
-    ok(res, await servicio.listarUsuarios());
-  }),
-);
-
-router.post(
-  '/usuarios',
-  autenticar,
-  soloAdmin,
-  validar({ body: esquemas.crearUsuarioSchema }),
-  asyncHandler(async (req, res) => {
-    creado(res, await servicio.crearUsuario(req.body));
-  }),
-);
-
-router.patch(
-  '/usuarios/:uuid',
-  autenticar,
-  soloAdmin,
-  validar({ params: esquemas.uuidParamSchema, body: esquemas.actualizarUsuarioSchema }),
-  asyncHandler(async (req, res) => {
-    ok(res, await servicio.actualizarUsuario(req.params.uuid, req.body, req.usuario.id));
-  }),
-);
-
-router.delete(
-  '/usuarios/:uuid',
-  autenticar,
-  soloAdmin,
-  validar({ params: esquemas.uuidParamSchema }),
-  asyncHandler(async (req, res) => {
-    ok(res, await servicio.eliminarUsuario(req.params.uuid, req.usuario.id));
-  }),
-);
+// Las cuentas de empleados se gestionan en src/modules/empleados, montado en
+// /auth/usuarios para que la app vieja siga encontrándolas.
 
 export default router;

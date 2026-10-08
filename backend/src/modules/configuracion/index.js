@@ -4,7 +4,7 @@ import { query } from '../../db/pool.js';
 import { withTransaction, txExecute } from '../../db/tx.js';
 import { validar } from '../../middleware/validate.js';
 import { autenticar } from '../../middleware/auth.js';
-import { soloAdmin } from '../../middleware/rbac.js';
+import { soloDirector } from '../../middleware/rbac.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ok } from '../../utils/responder.js';
 import { CONFIG_DEFAULTS } from '../../config/constants.js';
@@ -61,7 +61,7 @@ router.get(
 
 router.put(
   '/',
-  soloAdmin,
+  soloDirector,
   validar({
     body: z.object({
       valores: z.record(z.string().max(64), z.union([z.string().max(5000), z.number(), z.boolean()])),

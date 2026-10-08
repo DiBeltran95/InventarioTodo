@@ -1,0 +1,599 @@
+{
+ "_doc": "Casos de evaluarJornada. Los ejecutan backend/tests/jornada.test.mjs y mobile/test/jornada_test.dart: la misma regla en servidor y app. Zona del negocio America/Bogota (UTC-5, sin horario de verano). Instantes en UTC.",
+ "zona": "America/Bogota",
+ "desfaseMinutos": -300,
+ "casos": [
+  {
+   "nombre": "lunes a media mañana: en turno hasta las 17",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ]
+   },
+   "ahora": "2026-10-05T15:00:00.000Z",
+   "esperado": {
+    "permitido": true,
+    "motivo": "EN_TURNO",
+    "hasta": "2026-10-05T22:00:00.000Z",
+    "proximoInicio": "2026-10-06T13:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "un minuto antes de entrar: fuera, empieza a las 8",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ]
+   },
+   "ahora": "2026-10-05T12:59:00.000Z",
+   "esperado": {
+    "permitido": false,
+    "motivo": "FUERA_DE_HORARIO",
+    "hasta": null,
+    "proximoInicio": "2026-10-05T13:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "a las 17 en punto ya terminó (fin exclusivo)",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ]
+   },
+   "ahora": "2026-10-05T22:00:00.000Z",
+   "esperado": {
+    "permitido": false,
+    "motivo": "FUERA_DE_HORARIO",
+    "hasta": null,
+    "proximoInicio": "2026-10-06T13:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "viernes 17:30: entre turnos, el de noche empieza a las 18",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ]
+   },
+   "ahora": "2026-10-09T22:30:00.000Z",
+   "esperado": {
+    "permitido": false,
+    "motivo": "FUERA_DE_HORARIO",
+    "hasta": null,
+    "proximoInicio": "2026-10-09T23:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "viernes 23:30: turno de noche hasta el sábado a las 2",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ]
+   },
+   "ahora": "2026-10-10T04:30:00.000Z",
+   "esperado": {
+    "permitido": true,
+    "motivo": "EN_TURNO",
+    "hasta": "2026-10-10T07:00:00.000Z",
+    "proximoInicio": "2026-10-10T14:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "sábado 01:00: sigue el turno que empezó el viernes",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ]
+   },
+   "ahora": "2026-10-10T06:00:00.000Z",
+   "esperado": {
+    "permitido": true,
+    "motivo": "EN_TURNO",
+    "hasta": "2026-10-10T07:00:00.000Z",
+    "proximoInicio": "2026-10-10T14:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "sábado 02:30: fuera, vuelve a las 9",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ]
+   },
+   "ahora": "2026-10-10T07:30:00.000Z",
+   "esperado": {
+    "permitido": false,
+    "motivo": "FUERA_DE_HORARIO",
+    "hasta": null,
+    "proximoInicio": "2026-10-10T14:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "tramos contiguos 8-12 y 12-16 son un solo turno",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "12:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "12:00",
+      "fin": "16:00"
+     }
+    ]
+   },
+   "ahora": "2026-10-07T16:00:00.000Z",
+   "esperado": {
+    "permitido": true,
+    "motivo": "EN_TURNO",
+    "hasta": "2026-10-07T21:00:00.000Z",
+    "proximoInicio": "2026-10-14T13:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "domingo sin turno pero con acceso extra hasta las 12",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ],
+    "accesoExtraHasta": "2026-10-11T17:00:00.000Z"
+   },
+   "ahora": "2026-10-11T15:00:00.000Z",
+   "esperado": {
+    "permitido": true,
+    "motivo": "ACCESO_EXTRA",
+    "hasta": "2026-10-11T17:00:00.000Z",
+    "proximoInicio": "2026-10-12T13:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "acceso extra ya vencido no sirve",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ],
+    "accesoExtraHasta": "2026-10-11T14:00:00.000Z"
+   },
+   "ahora": "2026-10-11T15:00:00.000Z",
+   "esperado": {
+    "permitido": false,
+    "motivo": "FUERA_DE_HORARIO",
+    "hasta": null,
+    "proximoInicio": "2026-10-12T13:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "acceso extra que alarga el turno",
+   "jornada": {
+    "restringir": true,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ],
+    "accesoExtraHasta": "2026-10-06T00:00:00.000Z"
+   },
+   "ahora": "2026-10-05T21:00:00.000Z",
+   "esperado": {
+    "permitido": true,
+    "motivo": "EN_TURNO",
+    "hasta": "2026-10-06T00:00:00.000Z",
+    "proximoInicio": "2026-10-06T13:00:00.000Z"
+   }
+  },
+  {
+   "nombre": "sin restricción de horario siempre puede",
+   "jornada": {
+    "restringir": false,
+    "horario": [
+     {
+      "dia": 1,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 2,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 3,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 4,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "08:00",
+      "fin": "17:00"
+     },
+     {
+      "dia": 5,
+      "inicio": "18:00",
+      "fin": "02:00"
+     },
+     {
+      "dia": 6,
+      "inicio": "09:00",
+      "fin": "13:00"
+     }
+    ]
+   },
+   "ahora": "2026-10-11T08:00:00.000Z",
+   "esperado": {
+    "permitido": true,
+    "motivo": "SIN_RESTRICCION",
+    "hasta": null,
+    "proximoInicio": null
+   }
+  },
+  {
+   "nombre": "restringido sin ningún tramo: nunca, salvo acceso extra",
+   "jornada": {
+    "restringir": true,
+    "horario": []
+   },
+   "ahora": "2026-10-05T15:00:00.000Z",
+   "esperado": {
+    "permitido": false,
+    "motivo": "FUERA_DE_HORARIO",
+    "hasta": null,
+    "proximoInicio": null
+   }
+  }
+ ]
+}

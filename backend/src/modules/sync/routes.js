@@ -2,23 +2,26 @@ import { Router } from 'express';
 import { z } from 'zod';
 import * as servicio from './service.js';
 import { ENTIDADES } from './pullQueries.js';
-import { OPERACIONES_PUSH } from '../../config/constants.js';
 import { validar } from '../../middleware/validate.js';
-import { autenticar } from '../../middleware/auth.js';
-import { soloAdmin } from '../../middleware/rbac.js';
+import { autenticarConGracia } from '../../middleware/auth.js';
+import { soloDirector } from '../../middleware/rbac.js';
 import { limitadorSync } from '../../middleware/rateLimit.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ok } from '../../utils/responder.js';
 import { env } from '../../config/env.js';
 
 const router = Router();
-router.use(autenticar, limitadorSync);
+// Con gracia: al terminar el turno la app intenta un último envío antes de
+// cerrar la sesión, y unos minutos de margen evitan que la venta de las 5:59 se
+// quede en el teléfono hasta el día siguiente.
+router.use(autenticarConGracia, limitadorSync);
 
 const contexto = (req) => ({
   usuarioId: req.usuario.id,
   usuarioUuid: req.usuario.uuid,
   dispositivoUuid: req.dispositivoUuid,
   rol: req.usuario.rol,
+  alcance: req.alcance,
 });
 
 const pushSchema = z.object({
@@ -26,7 +29,15 @@ const pushSchema = z.object({
     .array(
       z.object({
         client_op_id: z.string().uuid(),
-        tipo: z.enum([...OPERACIONES_PUSH, 'CONTEO_AJUSTAR']),
+        // Texto libre y NO un enum de los tipos conocidos. Con un enum, un solo
+        // tipo que el servidor no conozca —una app más nueva que el backend,
+        // o una operación que se olvidó añadir a la lista— hacía fallar la
+        // validación del LOTE ENTERO con un 400: las ventas que venían en el
+        // mismo envío tampoco entraban, y tras los reintentos la app las
+        // apartaba todas como «con problema». Así pasó con METODO_PAGO_*.
+        // El tipo desconocido se rechaza ahora él solo, por operación
+        // (TIPO_DESCONOCIDO en procesarOperacion), y el resto se aplica.
+        tipo: z.string().min(1).max(50),
         payload: z.record(z.any()),
         creado_en: z.string().datetime({ offset: true }).optional(),
       }),
@@ -100,7 +111,7 @@ router.get(
 /** Mantenimiento: purga registros de idempotencia y tokens caducados. */
 router.post(
   '/mantenimiento',
-  soloAdmin,
+  soloDirector,
   validar({ body: z.object({ dias: z.coerce.number().int().min(7).max(365).default(30) }).default({}) }),
   asyncHandler(async (req, res) => {
     const [operaciones, tokens] = await Promise.all([
