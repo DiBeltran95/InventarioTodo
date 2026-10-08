@@ -37,7 +37,7 @@ void main() {
     ///
     /// Si alguien vuelve a poner un `watch` ahí, esta prueba falla.
     test('mantiene la MISMA instancia cuando cambia la sesión', () async {
-      final falsa = _SesionFalsa(_sesion(rol: RolUsuario.admin));
+      final falsa = _SesionFalsa(_sesion(rol: RolUsuario.director));
       final contenedor = ProviderContainer(
         overrides: [sesionProvider.overrideWith(() => falsa)],
       );
@@ -65,7 +65,7 @@ void main() {
       final contenedor = ProviderContainer(
         overrides: [
           sesionProvider.overrideWith(
-            () => _SesionFalsa(_sesion(rol: RolUsuario.admin)),
+            () => _SesionFalsa(_sesion(rol: RolUsuario.director)),
           ),
         ],
       );
@@ -87,12 +87,37 @@ void main() {
       expect(vendedor.veCostos, isFalse);
     });
 
-    test('el administrador sí', () {
-      const admin = RolUsuario.admin;
-      expect(admin.puedeEditarCatalogo, isTrue);
-      expect(admin.puedeAnularVentas, isTrue);
-      expect(admin.puedeGestionarUsuarios, isTrue);
-      expect(admin.veCostos, isTrue);
+    test('director y gerente gestionan catálogo, anulaciones, cuentas y costos', () {
+      for (final rol in [RolUsuario.director, RolUsuario.gerente]) {
+        expect(rol.puedeEditarCatalogo, isTrue, reason: rol.etiqueta);
+        expect(rol.puedeAnularVentas, isTrue, reason: rol.etiqueta);
+        expect(rol.puedeGestionarUsuarios, isTrue, reason: rol.etiqueta);
+        expect(rol.veCostos, isTrue, reason: rol.etiqueta);
+        expect(rol.ajustaDirecto, isTrue, reason: rol.etiqueta);
+      }
+    });
+
+    test('el auxiliar registra entradas y solicita ajustes, pero no vende ni ve costos', () {
+      const aux = RolUsuario.auxiliarInventario;
+      expect(aux.puedeRegistrarEntradas, isTrue);
+      expect(aux.solicitaAjustes, isTrue);
+      expect(aux.ajustaDirecto, isFalse);
+      expect(aux.puedeVender, isFalse);
+      expect(aux.veCostos, isFalse);
+      expect(aux.pideTraslados, isFalse);
+    });
+
+    test('vendedor y auxiliar son de una sede; gerente y director no', () {
+      expect(RolUsuario.vendedor.esDeUnaSede, isTrue);
+      expect(RolUsuario.auxiliarInventario.esDeUnaSede, isTrue);
+      expect(RolUsuario.gerente.esDeUnaSede, isFalse);
+      expect(RolUsuario.director.esDeUnaSede, isFalse);
+    });
+
+    test('el valor de la API va y vuelve sin perderse', () {
+      for (final rol in RolUsuario.values) {
+        expect(RolUsuario.desde(rol.api), rol);
+      }
     });
 
     test('ante un rol desconocido se asume el MÁS restrictivo', () {
@@ -100,7 +125,7 @@ void main() {
       expect(RolUsuario.desde(null), RolUsuario.vendedor);
       expect(RolUsuario.desde('SUPERADMIN'), RolUsuario.vendedor);
       expect(RolUsuario.desde('admin'), RolUsuario.vendedor); // distingue mayúsculas
-      expect(RolUsuario.desde('ADMIN'), RolUsuario.admin);
+      expect(RolUsuario.desde('ADMIN'), RolUsuario.director, reason: 'el director conserva el valor ADMIN');
     });
   });
 }

@@ -47,6 +47,10 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
   String _tipo = 'ENTRADA';
   bool _guardando = false;
 
+  /// Director o gerente. El auxiliar de inventario sólo registra entradas: sin
+  /// costo, sin precio y sin mermas (ésas las pide y las aprueba el gerente).
+  bool get _gestiona => ref.read(sesionProvider).value?.rol.ajustaDirecto ?? false;
+
   @override
   void initState() {
     super.initState();
@@ -72,6 +76,8 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
     if (uuid == null) return;
     final item = await ref.read(productosDaoProvider).obtener(uuid);
     if (item == null || !mounted) return;
+    // El auxiliar no ve costos ni toca precios: no se le precargan.
+    if (!_gestiona) return;
 
     if (_costo.text.isEmpty) {
       _costo.text = item.precioCompra.esCero ? '' : item.precioCompra.formatSinSimbolo();
@@ -121,10 +127,12 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
         context,
         'Código no registrado',
         esError: true,
-        accion: SnackBarAction(
-          label: 'Crear',
-          onPressed: () => context.push('${Rutas.productoNuevo}?codigo=$resultado'),
-        ),
+        accion: _gestiona
+            ? SnackBarAction(
+                label: 'Crear',
+                onPressed: () => context.push('${Rutas.productoNuevo}?codigo=$resultado'),
+              )
+            : null,
       );
       return;
     }
@@ -147,15 +155,17 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
 
     try {
       final cantidad = Cantidad.parse(_cantidad.text.replaceAll(',', '.'));
-      final costo = _importe(_costo.text);
+      final costo = _gestiona ? _importe(_costo.text) : null;
 
       // La regla vive en `precioAActualizar` y está cubierta por pruebas: es
       // corta pero sus efectos secundarios no se ven probando a mano.
-      final precioNuevo = precioAActualizar(
-        tipo: _tipo,
-        tecleado: _importe(_precioVenta.text),
-        original: _precioVentaOriginal,
-      );
+      final precioNuevo = _gestiona
+          ? precioAActualizar(
+              tipo: _tipo,
+              tecleado: _importe(_precioVenta.text),
+              original: _precioVentaOriginal,
+            )
+          : null;
 
       await ref.read(inventarioDaoProvider).registrarMovimiento(
             productoUuid: _productoUuid!,
@@ -204,6 +214,7 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
   @override
   Widget build(BuildContext context) {
     final proveedores = ref.watch(proveedoresProvider).value ?? const <Proveedor>[];
+    final gestiona = ref.watch(sesionProvider).value?.rol.ajustaDirecto ?? false;
     final producto = _productoUuid == null
         ? null
         : ref.watch(productoProvider(_productoUuid!)).value;
@@ -231,28 +242,30 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
             ),
             const SizedBox(height: 20),
 
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(
-                  value: 'ENTRADA',
-                  label: Text('Entrada'),
-                  icon: Icon(Icons.add_rounded),
-                ),
-                ButtonSegment(
-                  value: 'DEVOLUCION',
-                  label: Text('Devolución'),
-                  icon: Icon(Icons.undo_rounded),
-                ),
-                ButtonSegment(
-                  value: 'MERMA',
-                  label: Text('Merma'),
-                  icon: Icon(Icons.delete_outline_rounded),
-                ),
-              ],
-              selected: {_tipo},
-              onSelectionChanged: (s) => setState(() => _tipo = s.first),
-            ),
-            const SizedBox(height: 20),
+            if (gestiona) ...[
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(
+                    value: 'ENTRADA',
+                    label: Text('Entrada'),
+                    icon: Icon(Icons.add_rounded),
+                  ),
+                  ButtonSegment(
+                    value: 'DEVOLUCION',
+                    label: Text('Devolución'),
+                    icon: Icon(Icons.undo_rounded),
+                  ),
+                  ButtonSegment(
+                    value: 'MERMA',
+                    label: Text('Merma'),
+                    icon: Icon(Icons.delete_outline_rounded),
+                  ),
+                ],
+                selected: {_tipo},
+                onSelectionChanged: (s) => setState(() => _tipo = s.first),
+              ),
+              const SizedBox(height: 20),
+            ],
 
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -277,31 +290,33 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
                     },
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    controller: _costo,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    // Repinta el margen: se decide el precio mirando el costo
-                    // que se acaba de teclear, no el de la compra anterior.
-                    onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(
-                      labelText: 'Costo unitario',
-                      prefixText: r'$ ',
+                if (gestiona) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _costo,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      // Repinta el margen: se decide el precio mirando el costo
+                      // que se acaba de teclear, no el de la compra anterior.
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Costo unitario',
+                        prefixText: r'$ ',
+                      ),
+                      // El costo es opcional en merma y devolución: no siempre se
+                      // conoce, y exigirlo bloquearía el registro del movimiento.
+                      validator: (v) {
+                        if ((v ?? '').trim().isEmpty) return null;
+                        try {
+                          Money.parse(v!.replaceAll('.', '').replaceAll(',', '.'));
+                          return null;
+                        } on FormatException {
+                          return 'Importe no válido';
+                        }
+                      },
                     ),
-                    // El costo es opcional en merma y devolución: no siempre se
-                    // conoce, y exigirlo bloquearía el registro del movimiento.
-                    validator: (v) {
-                      if ((v ?? '').trim().isEmpty) return null;
-                      try {
-                        Money.parse(v!.replaceAll('.', '').replaceAll(',', '.'));
-                        return null;
-                      } on FormatException {
-                        return 'Importe no válido';
-                      }
-                    },
                   ),
-                ),
+                ],
               ],
             ),
             // El precio de venta se edita AQUÍ y no en otra pantalla.
@@ -310,7 +325,7 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
             // repercutirlo es justo éste, con la factura delante. Obligar a
             // salir a editar el producto hacía que la subida se aplazara y se
             // acabara vendiendo con el margen viejo.
-            if (_tipo == 'ENTRADA') ...[
+            if (_tipo == 'ENTRADA' && gestiona) ...[
               const SizedBox(height: 14),
               TextFormField(
                 controller: _precioVenta,
@@ -343,7 +358,7 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
             // Sin proveedores, antes no se pintaba nada: el campo desaparecía y
             // no había forma de enterarse de que se podían registrar. Ahora el
             // hueco invita a crear el primero y vuelve aquí con él ya elegido.
-            if (proveedores.isEmpty)
+            if (proveedores.isEmpty && gestiona)
               Card(
                 child: ListTile(
                   leading: CircleAvatar(
@@ -360,7 +375,7 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
                   onTap: () => context.push(Rutas.proveedores),
                 ),
               )
-            else
+            else if (proveedores.isNotEmpty)
               Row(
                 children: [
                   Expanded(
@@ -375,11 +390,12 @@ class _EntradaPageState extends ConsumerState<EntradaPage> {
                       onChanged: (v) => setState(() => _proveedorUuid = v),
                     ),
                   ),
-                  IconButton(
-                    onPressed: () => context.push(Rutas.proveedores),
-                    icon: const Icon(Icons.tune_rounded),
-                    tooltip: 'Gestionar proveedores',
-                  ),
+                  if (gestiona)
+                    IconButton(
+                      onPressed: () => context.push(Rutas.proveedores),
+                      icon: const Icon(Icons.tune_rounded),
+                      tooltip: 'Gestionar proveedores',
+                    ),
                 ],
               ),
             const SizedBox(height: 14),

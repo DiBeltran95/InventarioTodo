@@ -34,7 +34,7 @@ class TarjetaProducto extends ConsumerWidget {
     // acordarse de pasar. El costo de compra es dato privado del negocio: basta
     // que alguien reutilice esta tarjeta un día y olvide el parámetro para
     // filtrarlo. Preguntando aquí, ese descuido no puede ocurrir.
-    final mostrarCosto = ref.watch(esAdminProvider);
+    final mostrarCosto = ref.watch(esGestorProvider);
     final (colorStock, fondoStock) = item.agotado
         ? (dominio.peligro, dominio.peligroContenedor)
         : item.bajoStock

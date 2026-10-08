@@ -32,7 +32,7 @@ class ProductoDetallePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asincrono = ref.watch(productoProvider(uuid));
-    final esAdmin = ref.watch(esAdminProvider);
+    final esAdmin = ref.watch(esGestorProvider);
 
     return asincrono.when(
       loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
@@ -716,7 +716,7 @@ class _UltimosMovimientos extends ConsumerWidget {
     // El kardex es información de inventario, no de mostrador: quién cargó
     // qué y cuándo. Además, «Ver todo» lleva a una ruta de administración que
     // al vendedor le rebotaría.
-    if (!ref.watch(esAdminProvider)) return const SizedBox.shrink();
+    if (!ref.watch(esGestorProvider)) return const SizedBox.shrink();
     if (movimientos.isEmpty) return const SizedBox.shrink();
 
     return Card(

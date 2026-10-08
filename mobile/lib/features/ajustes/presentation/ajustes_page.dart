@@ -188,7 +188,7 @@ class AjustesPage extends ConsumerWidget {
               // Sólo el administrador gestiona cuentas. La app no tiene registro
               // público: es un punto de venta, no una app de consumo — quien se
               // registrara solo tendría acceso al inventario del negocio.
-              if (ref.watch(esAdminProvider)) ...[
+              if (ref.watch(esGestorProvider)) ...[
                 ListTile(
                   leading: const Icon(Icons.group_outlined),
                   title: const Text('Cuentas de acceso'),

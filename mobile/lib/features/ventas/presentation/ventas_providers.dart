@@ -83,7 +83,7 @@ final filtroVentasProvider =
 /// lo único que le compete.
 final ventasProvider = StreamProvider<List<Venta>>((ref) {
   final filtro = ref.watch(filtroVentasProvider);
-  final esAdmin = ref.watch(esAdminProvider);
+  final esAdmin = ref.watch(esGestorProvider);
   final dao = ref.watch(ventasDaoProvider);
 
   if (esAdmin) {

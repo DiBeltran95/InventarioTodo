@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../money/money.dart';
 import '../app_database.dart';
 import 'outbox_dao.dart';
 
@@ -85,15 +86,25 @@ class MetodosPagoDao {
 
   // ── Lecturas ──────────────────────────────────────────────────────────────
 
-  /// Medios activos, en el orden configurado. Es lo que ve el vendedor al
-  /// cobrar, así que los dados de baja no aparecen.
-  Stream<List<MetodoPago>> observarActivos() => (db.select(db.metodosPago)
-        ..where((t) => t.deletedAt.isNull() & t.activo.equals(true))
-        ..orderBy([
-          (t) => OrderingTerm.asc(t.orden),
-          (t) => OrderingTerm.asc(t.nombre),
-        ]))
-      .watch();
+  /// Medios activos de la sede activa, en el orden configurado. Es lo que ve
+  /// el vendedor al cobrar: los comunes a todas las sedes y los de la suya
+  /// (su propio Nequi, su QR). Los de otras sedes no aparecen.
+  Stream<List<MetodoPago>> observarActivos() {
+    final estado = db.select(db.estadoApp)..where((t) => t.id.equals(1));
+    return estado.watchSingleOrNull().asyncExpand((e) {
+      final sede = e?.sedeActivaUuid;
+      return (db.select(db.metodosPago)
+            ..where((t) =>
+                t.deletedAt.isNull() &
+                t.activo.equals(true) &
+                (t.sedeUuid.isNull() | (sede == null ? const Constant(false) : t.sedeUuid.equals(sede))))
+            ..orderBy([
+              (t) => OrderingTerm.asc(t.orden),
+              (t) => OrderingTerm.asc(t.nombre),
+            ]))
+          .watch();
+    });
+  }
 
   /// Todos, incluidos los inactivos: es la vista de administración.
   Stream<List<MetodoPagoConUso>> observarTodos() {
@@ -153,6 +164,14 @@ class MetodosPagoDao {
     bool requiereReferencia = false,
     String? instrucciones,
     String? qrLocal,
+
+    /// null = disponible en todas las sedes.
+    String? sedeUuid,
+
+    /// Sólo entidades de crédito: comisión en centésimas de punto (5 % = 500)
+    /// y días en que suelen pagar.
+    int? comisionPct,
+    int? diasPago,
   }) async {
     final uuid = _uuid.v7();
     final ahora = DateTime.now().toUtc();
@@ -169,6 +188,9 @@ class MetodosPagoDao {
               instrucciones: Value(_limpio(instrucciones)),
               qrLocal: Value(qrLocal),
               orden: Value(posicion),
+              sedeUuid: Value(sedeUuid),
+              comisionPct: Value(comisionPct),
+              diasPago: Value(diasPago),
               updatedAt: Value(ahora),
             ),
           );
@@ -189,6 +211,9 @@ class MetodosPagoDao {
           'instrucciones': _limpio(instrucciones),
           'orden': posicion,
           'activo': true,
+          'sede_uuid': sedeUuid,
+          'comision_pct': comisionPct == null ? null : TasaIva(comisionPct).toApi(),
+          'dias_pago': diasPago,
         },
       );
     });
@@ -207,6 +232,11 @@ class MetodosPagoDao {
     String? qrUrl,
     bool? activo,
     int? orden,
+
+    /// `Value.absent()` = no cambia; `Value(null)` = pasa a todas las sedes.
+    Value<String?> sedeUuid = const Value.absent(),
+    Value<int?> comisionPct = const Value.absent(),
+    Value<int?> diasPago = const Value.absent(),
   }) async {
     final ahora = DateTime.now().toUtc();
 
@@ -226,6 +256,9 @@ class MetodosPagoDao {
           qrUrl: qrUrl == null ? const Value.absent() : Value(qrUrl),
           activo: activo == null ? const Value.absent() : Value(activo),
           orden: orden == null ? const Value.absent() : Value(orden),
+          sedeUuid: sedeUuid,
+          comisionPct: comisionPct,
+          diasPago: diasPago,
           updatedAt: Value(ahora),
         ),
       );
@@ -239,6 +272,11 @@ class MetodosPagoDao {
       if (qrUrl != null) payload['qr_url'] = qrUrl;
       if (activo != null) payload['activo'] = activo;
       if (orden != null) payload['orden'] = orden;
+      if (sedeUuid.present) payload['sede_uuid'] = sedeUuid.value;
+      if (comisionPct.present) {
+        payload['comision_pct'] = comisionPct.value == null ? null : TasaIva(comisionPct.value!).toApi();
+      }
+      if (diasPago.present) payload['dias_pago'] = diasPago.value;
 
       // `qrLocal` es una ruta de ESTE teléfono: no significa nada en el
       // servidor ni en los demás dispositivos, así que nunca se envía.

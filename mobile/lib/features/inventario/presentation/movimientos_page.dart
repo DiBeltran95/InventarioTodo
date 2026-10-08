@@ -44,7 +44,7 @@ class _MovimientosPageState extends ConsumerState<MovimientosPage> {
     final producto = widget.productoUuid == null
         ? null
         : ref.watch(productoProvider(widget.productoUuid!)).value;
-    final verCostos = ref.watch(esAdminProvider);
+    final verCostos = ref.watch(esGestorProvider);
 
     return Scaffold(
       appBar: AppBar(

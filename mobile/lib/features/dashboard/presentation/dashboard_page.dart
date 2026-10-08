@@ -27,7 +27,7 @@ class DashboardPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final sesion = ref.watch(sesionProvider).value;
     final resumen = ref.watch(resumenDashboardProvider);
-    final esAdmin = ref.watch(esAdminProvider);
+    final esAdmin = ref.watch(esGestorProvider);
 
     return Scaffold(
       body: RefreshIndicator(
@@ -441,7 +441,7 @@ class _SeccionAlertas extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final bajos = ref.watch(stockBajoProvider).value ?? const [];
     if (bajos.isEmpty) return const SizedBox.shrink();
-    final esAdmin = ref.watch(esAdminProvider);
+    final esAdmin = ref.watch(esGestorProvider);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),

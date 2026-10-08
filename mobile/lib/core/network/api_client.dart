@@ -57,7 +57,37 @@ class ApiClient {
 
   /// Se invoca cuando el refresco falla de forma definitiva: la sesión murió y
   /// hay que llevar al usuario al login.
-  void Function()? alPerderSesion;
+  /// Se llama cuando el servidor dice que esta sesión ya no vale: cuenta
+  /// inhabilitada, fuera de turno, sesión revocada. Lo escucha la guardia de
+  /// sesión, que cierra la sesión en el teléfono y muestra el motivo.
+  ///
+  /// Antes este callback existía pero nadie lo asignaba, y además un 403 no lo
+  /// disparaba: un empleado inhabilitado seguía trabajando en su teléfono.
+  void Function(String codigo, String mensaje)? alPerderSesion;
+
+  /// Códigos con los que el servidor expulsa una sesión. Cualquier otro 401/403
+  /// (un permiso concreto, una sede ajena) es un error de esa operación y no
+  /// cierra la sesión.
+  static const codigosDeExpulsion = {
+    'CUENTA_DESACTIVADA',
+    'FUERA_DE_HORARIO',
+    'USUARIO_INEXISTENTE',
+    'SIN_SEDE',
+    'REFRESH_INVALIDO',
+    'REFRESH_REUTILIZADO',
+    'REFRESH_EXPIRADO',
+  };
+
+  /// Motivo del último refresco rechazado, para informarlo al expulsar.
+  ({String codigo, String mensaje})? _rechazoRefresco;
+
+  static ({String codigo, String mensaje})? _errorDe(dynamic cuerpo) {
+    if (cuerpo is Map && cuerpo['error'] is Map) {
+      final e = cuerpo['error'] as Map;
+      return (codigo: (e['codigo'] as String?) ?? '', mensaje: (e['mensaje'] as String?) ?? '');
+    }
+    return null;
+  }
 
   String get urlBase => _dio.options.baseUrl;
 
@@ -162,10 +192,19 @@ class ApiClient {
       throw ApiException.desdeDio(e);
     }
 
-    if (respuesta.statusCode == 401 && !esReintento) {
-      final refrescado = await _refrescarToken();
-      if (refrescado) return _ejecutar(peticion, esReintento: true);
-      alPerderSesion?.call();
+    final conSesion = respuesta.requestOptions.extra['sinAuth'] != true;
+    if (conSesion && (respuesta.statusCode == 401 || respuesta.statusCode == 403)) {
+      final error = _errorDe(respuesta.data);
+      if (respuesta.statusCode == 401 && !esReintento && error?.codigo != 'CUENTA_DESACTIVADA') {
+        final refrescado = await _refrescarToken();
+        if (refrescado) return _ejecutar(peticion, esReintento: true);
+        final rechazo = _rechazoRefresco;
+        if (rechazo != null && codigosDeExpulsion.contains(rechazo.codigo)) {
+          alPerderSesion?.call(rechazo.codigo, rechazo.mensaje);
+        }
+      } else if (error != null && codigosDeExpulsion.contains(error.codigo)) {
+        alPerderSesion?.call(error.codigo, error.mensaje);
+      }
     }
 
     if (respuesta.statusCode! >= 400) {
@@ -200,9 +239,13 @@ class ApiClient {
         options: Options(extra: {'sinAuth': true}),
       );
       if (r.statusCode != 200) {
+        // El servidor rechazó la sesión (no es un problema de red): se guarda
+        // el motivo para que quien expulse pueda explicarlo.
+        _rechazoRefresco = _errorDe(r.data);
         await _tokens.limpiar();
         return false;
       }
+      _rechazoRefresco = null;
       final datos = (r.data as Map)['data'] as Map;
       await _tokens.guardarTokens(
         accessToken: datos['access_token'] as String,

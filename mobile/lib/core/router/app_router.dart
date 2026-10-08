@@ -4,13 +4,19 @@ import 'package:go_router/go_router.dart';
 
 import '../../features/ajustes/presentation/ajustes_page.dart';
 import '../../features/ajustes/presentation/pendientes_page.dart';
+import '../../features/auditoria/presentation/auditoria_page.dart';
+import '../../features/auth/domain/sesion.dart';
 import '../../features/auth/presentation/auth_providers.dart';
 import '../../features/auth/presentation/login_page.dart';
 import '../../features/auth/presentation/usuarios_page.dart';
+import '../../features/caja/presentation/caja_page.dart';
 import '../../features/categorias/presentation/categorias_page.dart';
+import '../../features/cuentas/presentation/cuentas_por_cobrar_page.dart';
 import '../../features/dashboard/presentation/dashboard_page.dart';
 import '../../features/inventario/presentation/entrada_page.dart';
 import '../../features/inventario/presentation/movimientos_page.dart';
+import '../../features/inventario/presentation/solicitudes_ajuste_page.dart';
+import '../../features/inventario/presentation/stock_bajo_page.dart';
 import '../../features/metodos_pago/presentation/metodos_pago_page.dart';
 import '../../features/negocio/presentation/negocio_page.dart';
 import '../../features/productos/presentation/producto_detalle_page.dart';
@@ -21,6 +27,11 @@ import '../../features/reportes/presentation/empleados_page.dart';
 import '../../features/reportes/presentation/reportes_page.dart';
 import '../../features/scanner/domain/modo_escaner.dart';
 import '../../features/scanner/presentation/scanner_page.dart';
+import '../../features/sedes/presentation/cambio_sede_page.dart';
+import '../../features/sedes/presentation/sedes_page.dart';
+import '../../features/traslados/presentation/traslado_detalle_page.dart';
+import '../../features/traslados/presentation/traslado_nuevo_page.dart';
+import '../../features/traslados/presentation/traslados_page.dart';
 import '../../features/ventas/presentation/carrito_page.dart';
 import '../../features/ventas/presentation/venta_detalle_page.dart';
 import '../../features/ventas/presentation/ventas_page.dart';
@@ -53,6 +64,19 @@ class Rutas {
   static const empleados = '/empleados';
   static const productoNuevo = '/productos/nuevo';
 
+  // Multisede y gestión.
+  static const sedes = '/sedes';
+  static const traslados = '/traslados';
+  static const trasladoNuevo = '/traslados/nuevo';
+  static const stockBajo = '/stock-bajo';
+  static const solicitudesAjuste = '/solicitudes-ajuste';
+  static const caja = '/caja';
+  static const cierres = '/cierres';
+  static const cuentasPorCobrar = '/cuentas-por-cobrar';
+  static const auditoria = '/auditoria';
+  static const cambioSede = '/cambio-sede';
+
+  static String trasladoDetalle(String uuid) => '/traslados/$uuid';
   static String productoDetalle(String uuid) => '/productos/$uuid';
   static String productoEditar(String uuid) => '/productos/$uuid/editar';
   static String ventaDetalle(String uuid) => '/ventas/$uuid';
@@ -70,27 +94,58 @@ final _navegadorShell = GlobalKey<NavigatorState>(debugLabel: 'shell');
 /// encima, como la rejilla de venta rápida.
 final observadorRutas = RouteObserver<ModalRoute<dynamic>>();
 
-/// Rutas reservadas al administrador.
+/// ¿Puede este rol abrir esta ubicación?
 ///
-/// El criterio no es «funciones avanzadas», es **qué permite tapar un robo**:
-/// cargar existencias, ajustar un conteo, cambiar precios o anular ventas. El
-/// vendedor vende; nada más toca el inventario ni la caja.
-const _prefijosSoloAdmin = [
-  Rutas.entrada, // cargar mercancía
-  Rutas.movimientos, // kardex completo
-  Rutas.reportes, // márgenes y costos del negocio
-  Rutas.usuarios, // gestión de empleados
-  Rutas.proveedores, // a quién se le compra
-  Rutas.categorias, // estructura del catálogo
-  Rutas.metodosPago, // con qué cobra el negocio
-  Rutas.negocio, // identidad de la empresa en el ticket
-  Rutas.empleados, // control de cajas
-];
+/// El criterio no es «funciones avanzadas», es **qué permite tapar un robo o
+/// ver lo que no le toca**: cargar existencias, ajustar un conteo, cambiar
+/// precios, anular ventas, ver costos o gestionar personal. Cada rol entra sólo
+/// a lo que su trabajo necesita; lo demás lo devuelve al inicio.
+///
+/// Se decide con la ruta completa (con su consulta) porque el escáner es una
+/// sola pantalla con varios modos: vender no es lo mismo que recibir mercancía.
+bool puedeAbrir(Uri ubicacion, RolUsuario rol) {
+  final ruta = ubicacion.path;
+  bool en(String prefijo) => ruta == prefijo || ruta.startsWith('$prefijo/');
 
-bool _esRutaSoloAdmin(String ubicacion) {
-  if (_prefijosSoloAdmin.any((p) => ubicacion.startsWith(p))) return true;
-  // Alta y edición de productos, en cualquiera de sus formas.
-  return ubicacion.endsWith('/nuevo') || ubicacion.endsWith('/editar');
+  // Sólo el Director General: la identidad del negocio y sus sedes.
+  if (en(Rutas.negocio) || en(Rutas.sedes)) return rol.esDirector;
+
+  // Gestores (director y gerentes).
+  if (en(Rutas.reportes) || // márgenes y costos
+      en(Rutas.usuarios) || // personal
+      en(Rutas.proveedores) ||
+      en(Rutas.categorias) ||
+      en(Rutas.metodosPago) ||
+      en(Rutas.empleados) || // control de cajas
+      en(Rutas.cierres) ||
+      en(Rutas.cuentasPorCobrar) ||
+      en(Rutas.auditoria) ||
+      ruta == Rutas.productoNuevo ||
+      ruta.endsWith('/editar')) {
+    return rol.esGestor;
+  }
+
+  // Inventario: el auxiliar también, pero sólo para entradas.
+  if (en(Rutas.entrada) || en(Rutas.movimientos)) return rol.puedeRegistrarEntradas;
+  if (en(Rutas.solicitudesAjuste)) return rol.esGestor || rol.solicitaAjustes;
+
+  // Vender y lo que cuelga de la venta: el auxiliar no vende.
+  if (en(Rutas.carrito) || en(Rutas.caja) || en(Rutas.ventas)) return rol.puedeVender;
+  if (en(Rutas.escanear)) {
+    return switch (ModoEscaner.desde(ubicacion.queryParameters['modo'])) {
+      ModoEscaner.venta => rol.puedeVender,
+      ModoEscaner.entrada => rol.puedeRegistrarEntradas,
+      ModoEscaner.consulta || ModoEscaner.capturarCodigo => true,
+    };
+  }
+
+  if (en(Rutas.traslados)) return rol.pideTraslados;
+
+  // Sólo quien pertenece a una sede pide pasar a otra; las de un gerente las
+  // asigna el director.
+  if (en(Rutas.cambioSede)) return rol.esDeUnaSede;
+
+  return true;
 }
 
 /// Vuelve al escáner **sin apilar otra pantalla de cámara**.
@@ -164,12 +219,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       //
       // Ocultar los botones no basta: la ruta se puede alcanzar por un enlace
       // profundo, por el historial o por un `push` que se cuele en otra
-      // pantalla. El servidor ya rechaza estas operaciones (ver
-      // ROL_MINIMO en backend/src/modules/sync/service.js), pero dejar entrar
-      // al vendedor a un formulario que nunca podrá guardar es cruel.
-      if (autenticado && !(sesion.value?.esAdmin ?? false)) {
-        if (_esRutaSoloAdmin(estado.matchedLocation)) return Rutas.dashboard;
-      }
+      // pantalla. El servidor ya rechaza estas operaciones (ver PERMISOS en
+      // backend/src/modules/sync/service.js), pero dejar entrar a alguien a un
+      // formulario que nunca podrá guardar es cruel.
+      final rol = sesion.value?.rol;
+      if (rol != null && !puedeAbrir(estado.uri, rol)) return Rutas.dashboard;
 
       return null;
     },
@@ -265,6 +319,69 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: Rutas.usuarios,
         parentNavigatorKey: _navegadorRaiz,
         builder: (context, estado) => const UsuariosPage(),
+      ),
+
+      // Multisede y gestión.
+      GoRoute(
+        path: Rutas.sedes,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const SedesPage(),
+      ),
+      GoRoute(
+        path: Rutas.cambioSede,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const CambioSedePage(),
+      ),
+      GoRoute(
+        path: Rutas.traslados,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const TrasladosPage(),
+        routes: [
+          // 'nuevo' antes que ':uuid': si no, «nuevo» se leería como un uuid.
+          GoRoute(
+            path: 'nuevo',
+            parentNavigatorKey: _navegadorRaiz,
+            builder: (context, estado) => TrasladoNuevoPage(
+              productoUuid: estado.uri.queryParameters['producto'],
+              sedeDestinoUuid: estado.uri.queryParameters['destino'],
+            ),
+          ),
+          GoRoute(
+            path: ':uuid',
+            parentNavigatorKey: _navegadorRaiz,
+            builder: (context, estado) => TrasladoDetallePage(uuid: estado.pathParameters['uuid']!),
+          ),
+        ],
+      ),
+      GoRoute(
+        path: Rutas.stockBajo,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const StockBajoPage(),
+      ),
+      GoRoute(
+        path: Rutas.solicitudesAjuste,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const SolicitudesAjustePage(),
+      ),
+      GoRoute(
+        path: Rutas.caja,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const CajaPage(),
+      ),
+      GoRoute(
+        path: Rutas.cierres,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const CierresPage(),
+      ),
+      GoRoute(
+        path: Rutas.cuentasPorCobrar,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const CuentasPorCobrarPage(),
+      ),
+      GoRoute(
+        path: Rutas.auditoria,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const AuditoriaPage(),
       ),
 
       ShellRoute(

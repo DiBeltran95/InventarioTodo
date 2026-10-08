@@ -3,6 +3,9 @@ include: package:flutter_lints/flutter.yaml
 analyzer:
   exclude:
     - "**/*.g.dart"
+    - build/**
+    - android/**
+    - ios/**
   errors:
     # Un Future perdido en el motor de sincronización es una venta perdida.
     unawaited_futures: error

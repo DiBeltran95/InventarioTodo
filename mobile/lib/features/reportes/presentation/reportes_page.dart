@@ -25,7 +25,7 @@ class ReportesPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final periodo = ref.watch(periodoReporteProvider);
     final resumen = ref.watch(resumenReporteProvider);
-    final esAdmin = ref.watch(esAdminProvider);
+    final esAdmin = ref.watch(esGestorProvider);
 
     return Scaffold(
       body: SafeArea(

@@ -186,7 +186,7 @@ class _FilaCarrito extends ConsumerWidget {
     // $1 lo que vale $10.000 y se guarda la diferencia. El vendedor cobra al
     // precio del catálogo, sin excepciones; los descuentos los autoriza quien
     // responde por la caja.
-    final puedeEditarPrecio = ref.watch(esAdminProvider);
+    final puedeEditarPrecio = ref.watch(esGestorProvider);
 
     final tarjeta = Dismissible(
       key: ValueKey(linea.productoUuid),

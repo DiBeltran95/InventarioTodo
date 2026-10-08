@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:drift/drift.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -6,10 +8,13 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/config/app_config.dart';
 import '../../../core/database/app_database.dart';
+import '../../../core/database/daos/sync_dao.dart';
+import '../../../core/negocio/jornada.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/network/token_store.dart';
 import '../../../core/security/password_hash.dart';
+import '../domain/jornada_usuario.dart';
 import '../domain/sesion.dart';
 
 /// Autenticación con soporte offline real.
@@ -87,6 +92,9 @@ class AuthRepository {
       // offline. Si la contraseña cambió, la copia local está obsoleta.
       if (!e.esDeRed) {
         if (e.status == 401 || e.status == 403) {
+          // Una cuenta inhabilitada no debe poder entrar tampoco sin red con
+          // la copia local de su contraseña.
+          if (e.codigo == 'CUENTA_DESACTIVADA') await _marcarInactivo(correo);
           return ResultadoLogin.error(e.mensajeUsuario);
         }
         rethrow;
@@ -123,17 +131,43 @@ class AuthRepository {
     final valido = DateTime.now().toUtc().add(Duration(days: diasGracia));
 
     final esPrimeraVez = await _esDispositivoNuevo(usuario['uuid'] as String);
+    final rol = usuario['rol'] as String? ?? 'VENDEDOR';
+    final sedes = ((datos['sedes'] as List?) ?? const []).cast<Map<String, dynamic>>();
+    final sedeActiva = datos['sede_activa'] as String?;
+    final sedeAnterior =
+        (await (_db.select(_db.estadoApp)..where((t) => t.id.equals(1))).getSingleOrNull())?.sedeActivaUuid;
 
     await _db.transaction(() async {
+      // Las sedes llegan con el login para poder operar desde el primer
+      // segundo, antes de la primera bajada.
+      for (final s in sedes) {
+        await _db.into(_db.sedes).insertOnConflictUpdate(
+              SedesCompanion.insert(
+                uuid: s['uuid'] as String,
+                nombre: s['nombre'] as String,
+                codigo: s['codigo'] as String,
+                direccion: Value(s['direccion'] as String?),
+                telefono: Value(s['telefono'] as String?),
+                esPrincipal: Value(s['es_principal'] == true),
+                activo: Value(s['activo'] != false),
+              ),
+            );
+      }
+
       await _db.into(_db.usuarios).insertOnConflictUpdate(
             UsuariosCompanion.insert(
               uuid: usuario['uuid'] as String,
               nombre: usuario['nombre'] as String,
               email: usuario['email'] as String,
-              rol: Value(usuario['rol'] as String? ?? 'VENDEDOR'),
+              rol: Value(rol),
               activo: const Value(true),
               passwordHashLocal: Value(hash),
               saltLocal: Value(salt),
+              restringirHorario: Value(usuario['restringir_horario'] == true),
+              horario: Value(usuario['horario'] == null ? null : jsonEncode(usuario['horario'])),
+              accesoExtraHasta: Value(DateTime.tryParse(usuario['acceso_extra_hasta'] as String? ?? '')),
+              // El director ve todas: su lista de sedes queda vacía.
+              sedes: Value(rol == 'ADMIN' ? '' : sedes.map((s) => s['uuid']).join(',')),
               updatedAt: Value(DateTime.now().toUtc()),
             ),
           );
@@ -144,9 +178,17 @@ class AuthRepository {
           dispositivoUuid: Value(dispositivo['uuid'] as String),
           prefijoFolio: Value((datos['dispositivo'] as Map?)?['prefijo_folio'] as String?),
           offlineValidoHasta: Value(valido),
+          sedeActivaUuid: Value(sedeActiva ?? sedeAnterior),
+          motivoCierreSesion: const Value(null),
         ),
       );
     });
+
+    final sync = SyncDao(_db);
+    await sync.registrarHoraServidor(datos['servidor_utc'] as String?);
+    if (sedeActiva != null && sedeActiva != sedeAnterior) {
+      await sync.proyectarSedeActiva(sedeActiva);
+    }
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kUltimoEmail, email);
@@ -196,8 +238,33 @@ class AuthRepository {
     );
     if (!valida) return ResultadoLogin.error('Correo o contraseña incorrectos');
 
-    await (_db.update(_db.estadoApp)..where((t) => t.id.equals(1)))
-        .write(EstadoAppCompanion(usuarioUuid: Value(usuario.uuid)));
+    // Sin red no se le puede preguntar al servidor si está en su turno: se
+    // decide con el horario que bajó la última vez y con un reloj en el que se
+    // pueda confiar. Si el teléfono marca una hora anterior a la última que
+    // vio del servidor, alguien lo atrasó: se exige conexión.
+    if (!relojConfiable(ahora: DateTime.now(), ultimaHoraServidor: estado.horaServidor)) {
+      return ResultadoLogin.error(
+        'La hora del teléfono no coincide con la del servidor. Corrígela o conéctate a internet para entrar.',
+      );
+    }
+    final jornada = evaluarUsuario(usuario, estado);
+    if (!jornada.permitido) return ResultadoLogin.error(mensajeFueraDeHorario(jornada));
+
+    final sede = _sedeParaOperar(usuario, estado.sedeActivaUuid);
+    if (sede == null && usuario.rol != 'ADMIN') {
+      return ResultadoLogin.error('Tu cuenta no tiene una sede asignada. Pide a tu gerente que te asigne una.');
+    }
+
+    await (_db.update(_db.estadoApp)..where((t) => t.id.equals(1))).write(
+      EstadoAppCompanion(
+        usuarioUuid: Value(usuario.uuid),
+        sedeActivaUuid: sede == null ? const Value.absent() : Value(sede),
+        motivoCierreSesion: const Value(null),
+      ),
+    );
+    if (sede != null && sede != estado.sedeActivaUuid) {
+      await SyncDao(_db).proyectarSedeActiva(sede);
+    }
 
     return ResultadoLogin.ok(
       Sesion(
@@ -228,7 +295,16 @@ class AuthRepository {
     final usuario = await (_db.select(_db.usuarios)
           ..where((t) => t.uuid.equals(estado!.usuarioUuid!)))
         .getSingleOrNull();
-    if (usuario == null || !usuario.activo) return null;
+    if (usuario == null) return null;
+    if (!usuario.activo) {
+      await _cerrarConMotivo('Tu cuenta está inhabilitada. Habla con tu gerente.');
+      return null;
+    }
+    final jornada = evaluarUsuario(usuario, estado);
+    if (!jornada.permitido) {
+      await _cerrarConMotivo(mensajeFueraDeHorario(jornada));
+      return null;
+    }
 
     _api.dispositivoUuid = estado!.dispositivoUuid;
 
@@ -251,6 +327,67 @@ class AuthRepository {
 
   /// Cierra sesión. `borrarDatos` sólo debería usarse al cambiar de negocio o
   /// de servidor: **destruye las ventas que no se hayan sincronizado**.
+  /// Sede en la que opera el usuario: la suya si es de una sola; si gestiona
+  /// varias, la que ya estaba activa en el teléfono si es suya, o la primera.
+  String? _sedeParaOperar(Usuario u, String? actual) {
+    if (u.rol == 'ADMIN') return actual;
+    final suyas = u.sedes.split(',').where((s) => s.isNotEmpty).toList();
+    if (suyas.isEmpty) return null;
+    return suyas.contains(actual) ? actual : suyas.first;
+  }
+
+  Future<void> _marcarInactivo(String email) =>
+      (_db.update(_db.usuarios)..where((t) => t.email.equals(email)))
+          .write(const UsuariosCompanion(activo: Value(false)));
+
+  /// Cierre forzado: conserva TODO (la cola incluida) y deja el motivo para
+  /// que la pantalla de inicio lo explique.
+  Future<void> _cerrarConMotivo(String motivo) async {
+    await _tokens.limpiar();
+    await (_db.update(_db.estadoApp)..where((t) => t.id.equals(1))).write(
+      EstadoAppCompanion(usuarioUuid: const Value(null), motivoCierreSesion: Value(motivo)),
+    );
+  }
+
+  /// Expulsión ordenada por la guardia de sesión (cuenta inhabilitada, fin de
+  /// turno). Nunca borra datos: las ventas sin subir las sube el siguiente que
+  /// entre en este teléfono, a nombre de quien las hizo.
+  Future<void> expulsar(String motivo, {bool inhabilitado = false}) async {
+    if (inhabilitado) {
+      final estado = await (_db.select(_db.estadoApp)..where((t) => t.id.equals(1))).getSingleOrNull();
+      if (estado?.usuarioUuid != null) {
+        await (_db.update(_db.usuarios)..where((t) => t.uuid.equals(estado!.usuarioUuid!)))
+            .write(const UsuariosCompanion(activo: Value(false)));
+      }
+    }
+    await _cerrarConMotivo(motivo);
+  }
+
+  /// Lee y borra el motivo del último cierre forzado.
+  Future<String?> tomarMotivoCierre() async {
+    final estado = await (_db.select(_db.estadoApp)..where((t) => t.id.equals(1))).getSingleOrNull();
+    final motivo = estado?.motivoCierreSesion;
+    if (motivo != null) {
+      await (_db.update(_db.estadoApp)..where((t) => t.id.equals(1)))
+          .write(const EstadoAppCompanion(motivoCierreSesion: Value(null)));
+    }
+    return motivo;
+  }
+
+  /// Cambia la sede en la que opera el teléfono (gerente con varias sedes o
+  /// director). Avisa al servidor si hay red; sin red, el cambio local basta,
+  /// porque cada operación lleva su sede.
+  Future<void> cambiarSedeActiva(String sedeUuid) async {
+    await (_db.update(_db.estadoApp)..where((t) => t.id.equals(1)))
+        .write(EstadoAppCompanion(sedeActivaUuid: Value(sedeUuid)));
+    await SyncDao(_db).proyectarSedeActiva(sedeUuid);
+    try {
+      await _api.post('/auth/sede-activa', cuerpo: {'sede_uuid': sedeUuid});
+    } catch (_) {
+      // Sin red: el dispositivo informará su sede en el próximo login.
+    }
+  }
+
   Future<void> cerrarSesion({bool borrarDatos = false}) async {
     try {
       final refresh = await _tokens.refreshToken;
@@ -307,6 +444,9 @@ class AuthRepository {
     required String password,
     required RolUsuario rol,
     String? telefono,
+    List<String> sedes = const [],
+    bool restringirHorario = false,
+    List<TramoHorario> horario = const [],
   }) async {
     await _api.post('/auth/usuarios', cuerpo: {
       'nombre': nombre,
@@ -314,6 +454,9 @@ class AuthRepository {
       'password': password,
       'rol': rol.api,
       if (telefono != null && telefono.isNotEmpty) 'telefono': telefono,
+      'sedes': sedes,
+      'restringir_horario': restringirHorario,
+      'horario': [for (final t in horario) t.toJson()],
     });
   }
 
@@ -324,6 +467,9 @@ class AuthRepository {
     RolUsuario? rol,
     bool? activo,
     String? password,
+    List<String>? sedes,
+    bool? restringirHorario,
+    List<TramoHorario>? horario,
   }) async {
     await _api.patch('/auth/usuarios/$uuid', cuerpo: {
       // Sólo viajan los campos que cambian: un PATCH con nulos borraría datos.
@@ -332,8 +478,22 @@ class AuthRepository {
       'rol': ?rol?.api,
       'activo': ?activo,
       if (password != null && password.isNotEmpty) 'password': password,
+      'sedes': ?sedes,
+      'restringir_horario': ?restringirHorario,
+      if (horario != null) 'horario': [for (final t in horario) t.toJson()],
     });
   }
+
+  /// Deja entrar a alguien fuera de su horario hasta [hasta] (máximo 24 h).
+  /// Nunca acorta un acceso extra ya vigente; para eso está [revocarAccesoExtra].
+  Future<void> otorgarAccesoExtra(String uuid, {required DateTime hasta, String? motivo}) async {
+    await _api.post('/auth/usuarios/$uuid/acceso-extra', cuerpo: {
+      'hasta': hasta.toUtc().toIso8601String(),
+      if (motivo != null && motivo.isNotEmpty) 'motivo': motivo,
+    });
+  }
+
+  Future<void> revocarAccesoExtra(String uuid) => _api.delete('/auth/usuarios/$uuid/acceso-extra');
 
   /// Baja lógica. El servidor protege al último administrador.
   Future<void> eliminarUsuario(String uuid) => _api.delete('/auth/usuarios/$uuid');

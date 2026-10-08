@@ -72,7 +72,7 @@ class _ProductosPageState extends ConsumerState<ProductosPage> {
   Widget build(BuildContext context) {
     final filtro = ref.watch(filtroProductosProvider);
     final productos = ref.watch(productosProvider);
-    final esAdmin = ref.watch(esAdminProvider);
+    final esAdmin = ref.watch(esGestorProvider);
 
     return Scaffold(
       body: SafeArea(

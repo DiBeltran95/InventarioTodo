@@ -17,7 +17,9 @@ const Map<String, int> signoMovimiento = {
   'SALIDA': -1,
   'VENTA': -1,
   'MERMA': -1,
-  'TRASLADO': -1,
+  // El signo de un traslado lo pone quien lo aplica: − en la sede origen, +
+  // en la destino.
+  'TRASLADO': 0,
   'AJUSTE': 0,
 };
 
@@ -33,6 +35,14 @@ class MovimientoConProducto {
   bool get pendienteDeSync => movimiento.sincronizadoEn == null;
 }
 
+/// Sede activa del dispositivo y usuario con sesión: lo que firma cada
+/// movimiento local.
+class ContextoLocal {
+  const ContextoLocal({this.sedeUuid, this.usuarioUuid});
+  final String? sedeUuid;
+  final String? usuarioUuid;
+}
+
 class InventarioDao {
   InventarioDao(this.db, this.outbox);
 
@@ -42,12 +52,27 @@ class InventarioDao {
 
   // ── Escritura del libro ───────────────────────────────────────────────────
 
-  /// Inserta un movimiento y actualiza la proyección de stock.
+  Future<ContextoLocal> contexto() async {
+    final e = await (db.select(db.estadoApp)..where((t) => t.id.equals(1))).getSingleOrNull();
+    return ContextoLocal(sedeUuid: e?.sedeActivaUuid, usuarioUuid: e?.usuarioUuid);
+  }
+
+  /// Stock de un producto en una sede según este dispositivo.
+  Future<int> stockEnSede(String productoUuid, String sedeUuid) async {
+    final fila = await (db.select(db.stockSedes)
+          ..where((t) => t.productoUuid.equals(productoUuid) & t.sedeUuid.equals(sedeUuid)))
+        .getSingleOrNull();
+    return fila?.stockActual ?? 0;
+  }
+
+  /// Inserta un movimiento y actualiza las proyecciones de stock.
   ///
-  /// **Éste es el único punto de la app que escribe `productos.stockActual`.**
-  /// En el servidor ese papel lo cumplen los triggers; aquí no hay triggers, así
-  /// que la disciplina la impone tener un solo escritor. Si el stock se
-  /// escribiera también desde otro sitio, se descontaría el doble.
+  /// **Éste es el único punto de la app que escribe el stock**: la fila de la
+  /// sede en `stock_sedes` y, si es la sede activa, `productos.stockActual`,
+  /// que es lo que leen la venta y el escáner. En el servidor ese papel lo
+  /// cumplen los triggers; aquí no hay triggers, así que la disciplina la
+  /// impone tener un solo escritor. Si el stock se escribiera también desde
+  /// otro sitio, se descontaría el doble.
   ///
   /// Debe llamarse DENTRO de una transacción.
   Future<String> _aplicarMovimiento({
@@ -55,11 +80,14 @@ class InventarioDao {
     required String tipo,
     required Cantidad cantidad,
     String? uuidExplicito,
+    String? sedeUuid,
     Money? costoUnitario,
     Money? precioUnitario,
     String? ventaUuid,
+    String? trasladoUuid,
     String? proveedorUuid,
     String? usuarioUuid,
+    String? aprobadoPorUuid,
     String? lote,
     String? venceEl,
     String? documentoRef,
@@ -83,7 +111,15 @@ class InventarioDao {
       throw StateError('El producto $productoUuid no existe en la base local');
     }
 
-    final stockAnterior = producto.stockActual;
+    final ctx = await contexto();
+    final sede = sedeUuid ?? ctx.sedeUuid;
+    final esSedeActiva = sede == null || sede == ctx.sedeUuid;
+
+    // Sin sede todavía (instalación recién actualizada antes de su primera
+    // sincronización) se usa la proyección del producto, como antes.
+    final stockAnterior = sede == null
+        ? producto.stockActual
+        : (esSedeActiva ? producto.stockActual : await stockEnSede(productoUuid, sede));
     final stockResultante = stockAnterior + conSigno;
     final uuid = uuidExplicito ?? _uuid.v7();
     final instante = (fecha ?? DateTime.now()).toUtc();
@@ -99,8 +135,11 @@ class InventarioDao {
             stockAnterior: Value(stockAnterior),
             stockResultante: Value(stockResultante),
             ventaUuid: Value(ventaUuid),
+            sedeUuid: Value(sede),
+            trasladoUuid: Value(trasladoUuid),
             proveedorUuid: Value(proveedorUuid),
-            usuarioUuid: Value(usuarioUuid),
+            usuarioUuid: Value(usuarioUuid ?? ctx.usuarioUuid),
+            aprobadoPorUuid: Value(aprobadoPorUuid),
             lote: Value(lote),
             venceEl: Value(venceEl),
             documentoRef: Value(documentoRef),
@@ -111,14 +150,30 @@ class InventarioDao {
           mode: InsertMode.insertOrReplace,
         );
 
-    await (db.update(db.productos)..where((t) => t.uuid.equals(productoUuid))).write(
-      ProductosCompanion(
-        stockActual: Value(stockResultante),
-        // No se toca `updatedAt`: el stock es derivado y su verdad la fija el
-        // servidor en el pull. Marcarlo como modificado provocaría un
-        // ida y vuelta innecesario en la sincronización del catálogo.
-      ),
-    );
+    if (sede != null) {
+      final previa = await (db.select(db.stockSedes)
+            ..where((t) => t.productoUuid.equals(productoUuid) & t.sedeUuid.equals(sede)))
+          .getSingleOrNull();
+      await db.into(db.stockSedes).insertOnConflictUpdate(
+            StockSedesCompanion.insert(
+              productoUuid: productoUuid,
+              sedeUuid: sede,
+              stockActual: Value(stockResultante),
+              stockMinimo: Value(previa?.stockMinimo),
+            ),
+          );
+    }
+
+    if (esSedeActiva) {
+      await (db.update(db.productos)..where((t) => t.uuid.equals(productoUuid))).write(
+        ProductosCompanion(
+          stockActual: Value(stockResultante),
+          // No se toca `updatedAt`: el stock es derivado y su verdad la fija el
+          // servidor en el pull. Marcarlo como modificado provocaría un
+          // ida y vuelta innecesario en la sincronización del catálogo.
+        ),
+      );
+    }
 
     return uuid;
   }
@@ -262,12 +317,58 @@ class InventarioDao {
     return uuid;
   }
 
-  /// Usado por VentasDao dentro de su propia transacción.
+  /// Usado por TrasladosDao dentro de su propia transacción: el traslado
+  /// mueve stock de DOS sedes, así que la sede se indica explícitamente.
+  Future<String> aplicarMovimientoDeTraslado({
+    required String productoUuid,
+    required String sedeUuid,
+    required Cantidad cantidadConSigno,
+    required String trasladoUuid,
+    required String uuid,
+    required String motivo,
+  }) =>
+      _aplicarMovimiento(
+        productoUuid: productoUuid,
+        tipo: 'TRASLADO',
+        cantidad: cantidadConSigno,
+        uuidExplicito: uuid,
+        sedeUuid: sedeUuid,
+        trasladoUuid: trasladoUuid,
+        motivo: motivo,
+      );
+
+  /// Usado por AjustesDao al aprobar la solicitud de un auxiliar: el
+  /// movimiento es del solicitante, con el aprobador registrado.
+  Future<String> aplicarMovimientoAprobado({
+    required String productoUuid,
+    required String sedeUuid,
+    required String tipo,
+    required Cantidad cantidad,
+    required String uuid,
+    String? usuarioUuid,
+    String? aprobadoPorUuid,
+    String? motivo,
+  }) =>
+      _aplicarMovimiento(
+        productoUuid: productoUuid,
+        tipo: tipo,
+        cantidad: cantidad,
+        uuidExplicito: uuid,
+        sedeUuid: sedeUuid,
+        usuarioUuid: usuarioUuid,
+        aprobadoPorUuid: aprobadoPorUuid,
+        motivo: motivo,
+      );
+
+  /// Usado por VentasDao dentro de su propia transacción. `sedeUuid` sólo
+  /// para anular: el stock vuelve a la sede de la venta original, que puede no
+  /// ser la activa.
   Future<String> aplicarMovimientoDeVenta({
     required String productoUuid,
     required String tipo,
     required Cantidad cantidad,
     required String ventaUuid,
+    String? sedeUuid,
     Money? precioUnitario,
     Money? costoUnitario,
     String? usuarioUuid,
@@ -279,6 +380,7 @@ class InventarioDao {
         tipo: tipo,
         cantidad: cantidad,
         ventaUuid: ventaUuid,
+        sedeUuid: sedeUuid,
         precioUnitario: precioUnitario,
         costoUnitario: costoUnitario,
         usuarioUuid: usuarioUuid,
@@ -293,6 +395,7 @@ class InventarioDao {
     String? tipo,
     String? desde,
     String? hasta,
+    String? sedeUuid,
     int limite = 200,
   }) {
     final consulta = db.select(db.movimientos).join([
@@ -304,6 +407,7 @@ class InventarioDao {
       consulta.where(db.movimientos.productoUuid.equals(productoUuid));
     }
     if (tipo != null) consulta.where(db.movimientos.tipo.equals(tipo));
+    if (sedeUuid != null) consulta.where(db.movimientos.sedeUuid.equals(sedeUuid));
     if (desde != null) {
       consulta.where(db.movimientos.fechaLocal.isBiggerOrEqualValue(desde));
     }
@@ -332,22 +436,30 @@ class InventarioDao {
         ..limit(50))
       .watch();
 
-  /// Reconstruye `stockActual` desde el libro local. Red de seguridad
-  /// equivalente a `sp_recalcular_stock` del servidor.
+  /// Reconstruye el stock desde el libro local. Red de seguridad equivalente a
+  /// `sp_recalcular_stock` del servidor: por sede y la proyección de la activa.
   Future<void> recalcularStock() async {
     await db.transaction(() async {
+      final ctx = await contexto();
       final sumas = await db
           .customSelect(
-            'SELECT producto_uuid, COALESCE(SUM(cantidad),0) AS total '
-            'FROM movimientos GROUP BY producto_uuid',
+            'SELECT producto_uuid, sede_uuid, COALESCE(SUM(cantidad),0) AS total '
+            'FROM movimientos WHERE sede_uuid IS NOT NULL GROUP BY producto_uuid, sede_uuid',
             readsFrom: {db.movimientos},
           )
           .get();
 
       for (final fila in sumas) {
-        await (db.update(db.productos)
-              ..where((t) => t.uuid.equals(fila.read<String>('producto_uuid'))))
-            .write(ProductosCompanion(stockActual: Value(fila.read<int>('total'))));
+        final producto = fila.read<String>('producto_uuid');
+        final sede = fila.read<String>('sede_uuid');
+        final total = fila.read<int>('total');
+        await (db.update(db.stockSedes)
+              ..where((t) => t.productoUuid.equals(producto) & t.sedeUuid.equals(sede)))
+            .write(StockSedesCompanion(stockActual: Value(total)));
+        if (sede == ctx.sedeUuid) {
+          await (db.update(db.productos)..where((t) => t.uuid.equals(producto)))
+              .write(ProductosCompanion(stockActual: Value(total)));
+        }
       }
     });
   }

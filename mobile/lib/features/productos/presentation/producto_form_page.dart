@@ -275,7 +275,7 @@ class _ProductoFormPageState extends ConsumerState<ProductoFormPage> {
     }
 
     final categorias = ref.watch(categoriasProvider).value ?? const <Categoria>[];
-    final esAdmin = ref.watch(esAdminProvider);
+    final esAdmin = ref.watch(esGestorProvider);
 
     if (!esAdmin) {
       return Scaffold(

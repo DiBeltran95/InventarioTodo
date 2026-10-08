@@ -411,6 +411,19 @@ class SyncEngine extends ChangeNotifier {
       final datos = respuesta['data'] as Map<String, dynamic>;
       final entidades = datos['entidades'] as Map<String, dynamic>;
 
+      await _sync.registrarHoraServidor(datos['servidor_utc'] as String?);
+
+      // Si el alcance cambió (otra sede, otro rol, o la primera bajada tras
+      // actualizar la app), esta página se pidió con cursores que ya no
+      // valen: se descarta lo que no corresponde y se vuelve a pedir desde
+      // cero. La huella queda guardada, así que no entra en bucle.
+      final alcance = datos['alcance'] as String?;
+      if (await _sync.alcanceCambio(alcance)) {
+        await _sync.reiniciarPorAlcance(alcance!);
+        _fijar(_estado.copyWith(progresoTexto: 'Actualizando tus sedes…'));
+        continue;
+      }
+
       final aplicadas = await _sync.aplicarCambios(entidades);
       total += aplicadas;
 

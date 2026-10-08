@@ -25,7 +25,7 @@ class VentasPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final filtro = ref.watch(filtroVentasProvider);
     final ventas = ref.watch(ventasProvider);
-    final esAdmin = ref.watch(esAdminProvider);
+    final esAdmin = ref.watch(esGestorProvider);
 
     return Scaffold(
       body: SafeArea(

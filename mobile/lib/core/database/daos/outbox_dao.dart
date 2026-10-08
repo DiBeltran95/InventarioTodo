@@ -18,8 +18,33 @@ class OutboxDao {
   final AppDatabase db;
   static const _uuid = Uuid();
 
+  /// Operaciones que ocurren EN una sede y llevan la sede activa.
+  ///
+  /// Sólo éstas: en un medio de pago, por ejemplo, `sede_uuid` significa «este
+  /// medio es sólo de esta sede», y firmarlo con la sede del teléfono haría que
+  /// un medio creado para todas acabara siendo de una sola.
+  static const _ocurrenEnLaSede = {
+    'VENTA_CREAR',
+    'MOVIMIENTO_CREAR',
+    'CONTEO_AJUSTAR',
+    'AJUSTE_SOLICITAR',
+    'CIERRE_ABRIR',
+    'STOCK_MINIMO_FIJAR',
+    // La existencia inicial de un producto nuevo entra en la sede de quien lo
+    // da de alta.
+    'PRODUCTO_CREAR',
+  };
+
   /// Encola una operación. Devuelve el `client_op_id` que la hace idempotente
   /// en el servidor.
+  ///
+  /// Toda operación sale **firmada con su autor y su sede** en el momento de
+  /// crearla: `usuario_uuid` (quien tiene la sesión ahora) y `sede_uuid` (la
+  /// sede activa del teléfono). Es la única manera de que la trazabilidad
+  /// aguante un teléfono compartido: si Ana vende sin red, su turno termina y
+  /// entra Luis, la cola de Ana sube con la sesión de Luis, y sin esta firma el
+  /// servidor apuntaría las ventas a Luis. Si el payload ya trae alguno de los
+  /// dos (un traslado entre sedes, por ejemplo), se respeta.
   Future<String> encolar(
     String tipo, {
     required String entidad,
@@ -27,13 +52,20 @@ class OutboxDao {
     required Map<String, dynamic> payload,
   }) async {
     final clientOpId = _uuid.v7();
+    final estado =
+        await (db.select(db.estadoApp)..where((t) => t.id.equals(1))).getSingleOrNull();
+    final firmado = {
+      'usuario_uuid': ?estado?.usuarioUuid,
+      if (_ocurrenEnLaSede.contains(tipo)) 'sede_uuid': ?estado?.sedeActivaUuid,
+      ...payload,
+    };
     await db.into(db.syncOutbox).insert(
           SyncOutboxCompanion.insert(
             clientOpId: clientOpId,
             tipo: tipo,
             entidad: entidad,
             entidadUuid: Value(entidadUuid),
-            payload: jsonEncode(payload),
+            payload: jsonEncode(firmado),
           ),
         );
     return clientOpId;

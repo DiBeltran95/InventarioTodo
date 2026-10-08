@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import '../../money/money.dart';
@@ -75,6 +77,7 @@ class SyncDao {
     await db.transaction(() async {
       final bloqueados = await _uuidsConCambiosPendientes();
 
+      total += await _aplicarSedes(entidades['sedes']);
       total += await _aplicarUsuarios(entidades['usuarios'], bloqueados);
       total += await _aplicarCategorias(entidades['categorias'], bloqueados);
       total += await _aplicarProveedores(entidades['proveedores'], bloqueados);
@@ -85,7 +88,17 @@ class SyncDao {
       total += await _aplicarDetalles(entidades['venta_detalles']);
       total += await _aplicarPagos(entidades['venta_pagos']);
       total += await _aplicarMovimientos(entidades['movimientos_inventario']);
+      // Después de los movimientos: el stock de cada sede suma los
+      // movimientos locales que aún no han salido, y los que acaban de bajar
+      // ya cuentan como sincronizados.
+      total += await _aplicarStockSedes(entidades['stock_sedes']);
       total += await _aplicarAlertas(entidades['alertas']);
+      total += await _aplicarTraslados(entidades['traslados'], bloqueados);
+      total += await _aplicarTrasladoDetalles(entidades['traslado_detalles']);
+      total += await _aplicarTrasladoEventos(entidades['traslado_eventos']);
+      total += await _aplicarSolicitudesAjuste(entidades['solicitudes_ajuste'], bloqueados);
+      total += await _aplicarCierres(entidades['cierres_caja'], bloqueados);
+      total += await _aplicarRecaudos(entidades['recaudos'], bloqueados);
       total += await _aplicarConfiguracion(entidades['configuracion']);
 
       for (final entrada in entidades.entries) {
@@ -144,6 +157,10 @@ class SyncDao {
               activo: Value(u['activo'] == true || u['activo'] == 1),
               passwordHashLocal: Value(existente?.passwordHashLocal),
               saltLocal: Value(existente?.saltLocal),
+              restringirHorario: Value(_bool(u['restringir_horario'])),
+              horario: Value(_textoJson(u['horario'])),
+              accesoExtraHasta: Value(_fechaOpcional(u['acceso_extra_hasta'])),
+              sedes: Value((u['sedes'] as String?) ?? ''),
               updatedAt: Value(_fecha(u['updated_at'])),
               deletedAt: Value(_fechaOpcional(u['deleted_at'])),
             ),
@@ -206,6 +223,11 @@ class SyncDao {
               requiereReferencia: Value(_bool(m['requiere_referencia'])),
               qrUrl: Value(m['qr_url'] as String?),
               instrucciones: Value(m['instrucciones'] as String?),
+              sedeUuid: Value(m['sede_uuid'] as String?),
+              comisionPct: Value(
+                m['comision_pct'] == null ? null : TasaIva.parse(m['comision_pct'].toString()).escalada,
+              ),
+              diasPago: Value((m['dias_pago'] as num?)?.toInt()),
               color: Value((m['color'] as String?) ?? '#0E6B5C'),
               orden: Value((m['orden'] as num?)?.toInt() ?? 0),
               activo: Value(_bool(m['activo'], porDefecto: true)),
@@ -233,6 +255,7 @@ class SyncDao {
               ),
               cambio: Value(p['cambio'] == null ? null : _centavos(p['cambio'])),
               referencia: Value(p['referencia'] as String?),
+              cobrado: Value(p['cobrado'] == null ? 0 : _centavos(p['cobrado'])),
             ),
           );
     }
@@ -249,18 +272,24 @@ class SyncDao {
 
   Future<int> _aplicarProductos(dynamic bloque, Set<String> bloqueados) async {
     final items = _items(bloque).where((p) => !bloqueados.contains(p['uuid'])).toList();
+    final sedeActiva = await _sedeActiva();
 
     for (final p in items) {
       final uuid = p['uuid'] as String;
-
-      // Stock autoritativo del servidor + lo que aún no ha salido de la cola.
-      // Sin este ajuste, un pull haría "reaparecer" en pantalla el stock de las
-      // ventas que todavía están pendientes de enviar.
-      final stockServidor = _milesimas(p['stock_actual']);
-      final pendienteLocal = await _movimientosNoSincronizados(uuid);
-
       final existente =
           await (db.select(db.productos)..where((t) => t.uuid.equals(uuid))).getSingleOrNull();
+
+      // El `stock_actual` que trae el producto es el TOTAL de todas las sedes
+      // (lo lee la app vieja). Aquí el stock es el de la sede activa y lo fija
+      // `stock_sedes`; el producto sólo aporta su mínimo general, que vale en
+      // las sedes sin mínimo propio.
+      final minimoGeneral = _milesimas(p['stock_minimo']);
+      final minimoSede = sedeActiva == null
+          ? null
+          : (await (db.select(db.stockSedes)
+                    ..where((t) => t.productoUuid.equals(uuid) & t.sedeUuid.equals(sedeActiva)))
+                  .getSingleOrNull())
+              ?.stockMinimo;
 
       await db.into(db.productos).insertOnConflictUpdate(
             ProductosCompanion.insert(
@@ -274,8 +303,11 @@ class SyncDao {
               precioCompra: Value(_centavos(p['precio_compra'])),
               precioVenta: Value(_centavos(p['precio_venta'])),
               tasaIva: Value(TasaIva.parse((p['tasa_iva'] as String?) ?? '0.00').escalada),
-              stockActual: Value(stockServidor + pendienteLocal),
-              stockMinimo: Value(_milesimas(p['stock_minimo'])),
+              // Un producto nuevo empieza en 0 en esta sede hasta que llegue su
+              // fila de stock; uno existente conserva la que ya tenía.
+              stockActual: existente == null ? const Value(0) : const Value.absent(),
+              stockMinimo: Value(minimoSede ?? minimoGeneral),
+              stockMinimoGeneral: Value(minimoGeneral),
               stockMaximo: Value(
                 p['stock_maximo'] == null ? null : _milesimas(p['stock_maximo']),
               ),
@@ -292,12 +324,54 @@ class SyncDao {
     return items.length;
   }
 
-  Future<int> _movimientosNoSincronizados(String productoUuid) async {
+  /// Stock por sede: el del servidor más lo que este teléfono movió en esa sede
+  /// y todavía no ha subido. Sin esa suma, un pull haría «reaparecer» en
+  /// pantalla el stock de las ventas que siguen en la cola.
+  Future<int> _aplicarStockSedes(dynamic bloque) async {
+    final items = _items(bloque);
+    final sedeActiva = await _sedeActiva();
+
+    for (final f in items) {
+      final producto = f['producto_uuid'] as String;
+      final sede = f['sede_uuid'] as String;
+      final stock = _milesimas(f['stock_actual']) + await _movimientosNoSincronizados(producto, sede);
+      final minimo = f['stock_minimo'] == null ? null : _milesimas(f['stock_minimo']);
+
+      await db.into(db.stockSedes).insertOnConflictUpdate(
+            StockSedesCompanion.insert(
+              productoUuid: producto,
+              sedeUuid: sede,
+              stockActual: Value(stock),
+              stockMinimo: Value(minimo),
+              updatedAt: Value(_fecha(f['updated_at'])),
+            ),
+          );
+
+      if (sede == sedeActiva) {
+        final general = (await (db.select(db.productos)..where((t) => t.uuid.equals(producto)))
+                .getSingleOrNull())
+            ?.stockMinimoGeneral;
+        await (db.update(db.productos)..where((t) => t.uuid.equals(producto))).write(
+          ProductosCompanion(
+            stockActual: Value(stock),
+            stockMinimo: Value(minimo ?? general ?? 0),
+          ),
+        );
+      }
+    }
+    return items.length;
+  }
+
+  Future<String?> _sedeActiva() async =>
+      (await (db.select(db.estadoApp)..where((t) => t.id.equals(1))).getSingleOrNull())
+          ?.sedeActivaUuid;
+
+  Future<int> _movimientosNoSincronizados(String productoUuid, String sedeUuid) async {
     final fila = await db
         .customSelect(
           'SELECT COALESCE(SUM(cantidad),0) AS total FROM movimientos '
-          'WHERE producto_uuid = ? AND sincronizado_en IS NULL',
-          variables: [Variable<String>(productoUuid)],
+          'WHERE producto_uuid = ? AND sede_uuid = ? AND sincronizado_en IS NULL',
+          variables: [Variable<String>(productoUuid), Variable<String>(sedeUuid)],
           readsFrom: {db.movimientos},
         )
         .getSingle();
@@ -332,6 +406,8 @@ class SyncDao {
               numero: v['numero'] as String,
               usuarioUuid: Value(v['usuario_uuid'] as String?),
               dispositivoUuid: Value(v['dispositivo_uuid'] as String?),
+              sedeUuid: Value(v['sede_uuid'] as String?),
+              turnoUuid: Value(v['turno_uuid'] as String?),
               clienteNombre: Value(v['cliente_nombre'] as String?),
               clienteDocumento: Value(v['cliente_documento'] as String?),
               subtotal: Value(_centavos(v['subtotal'])),
@@ -430,8 +506,11 @@ class SyncDao {
                 m['stock_resultante'] == null ? null : _milesimas(m['stock_resultante']),
               ),
               ventaUuid: Value(ventaUuid),
+              sedeUuid: Value(m['sede_uuid'] as String?),
+              trasladoUuid: Value(m['traslado_uuid'] as String?),
               proveedorUuid: Value(m['proveedor_uuid'] as String?),
               usuarioUuid: Value(m['usuario_uuid'] as String?),
+              aprobadoPorUuid: Value(m['aprobado_por_uuid'] as String?),
               lote: Value(m['lote'] as String?),
               venceEl: Value(m['vence_el'] as String?),
               documentoRef: Value(m['documento_ref'] as String?),
@@ -455,6 +534,7 @@ class SyncDao {
               tipo: a['tipo'] as String,
               severidad: Value(a['severidad'] as String? ?? 'ADVERTENCIA'),
               productoUuid: Value(a['producto_uuid'] as String?),
+              sedeUuid: Value(a['sede_uuid'] as String?),
               ventaUuid: Value(a['venta_uuid'] as String?),
               mensaje: a['mensaje'] as String,
               resueltaEn: Value(_fechaOpcional(a['resuelta_en'])),
@@ -463,6 +543,255 @@ class SyncDao {
           );
     }
     return items.length;
+  }
+
+  /// El horario llega como texto JSON desde MariaDB o como lista ya decodificada.
+  String? _textoJson(dynamic v) {
+    if (v == null) return null;
+    if (v is String) return v.isEmpty ? null : v;
+    return jsonEncode(v);
+  }
+
+  int? _milesimasOpcional(dynamic v) => v == null ? null : _milesimas(v);
+  int? _centavosOpcional(dynamic v) => v == null ? null : _centavos(v);
+
+  Future<int> _aplicarSedes(dynamic bloque) async {
+    final items = _items(bloque);
+    for (final s in items) {
+      await db.into(db.sedes).insertOnConflictUpdate(
+            SedesCompanion.insert(
+              uuid: s['uuid'] as String,
+              nombre: s['nombre'] as String,
+              codigo: s['codigo'] as String,
+              direccion: Value(s['direccion'] as String?),
+              telefono: Value(s['telefono'] as String?),
+              esPrincipal: Value(_bool(s['es_principal'])),
+              activo: Value(_bool(s['activo'], porDefecto: true)),
+              updatedAt: Value(_fecha(s['updated_at'])),
+              deletedAt: Value(_fechaOpcional(s['deleted_at'])),
+            ),
+          );
+    }
+    return items.length;
+  }
+
+  Future<int> _aplicarTraslados(dynamic bloque, Set<String> bloqueados) async {
+    final items = _items(bloque).where((t) => !bloqueados.contains(t['uuid'])).toList();
+    for (final t in items) {
+      await db.into(db.traslados).insertOnConflictUpdate(
+            TrasladosCompanion.insert(
+              uuid: t['uuid'] as String,
+              numero: t['numero'] as String,
+              sedeOrigenUuid: t['sede_origen_uuid'] as String,
+              sedeDestinoUuid: t['sede_destino_uuid'] as String,
+              estado: Value(t['estado'] as String? ?? 'PENDIENTE'),
+              confirma: Value(t['confirma'] as String? ?? 'GESTOR'),
+              notas: Value(t['notas'] as String?),
+              solicitadoPorUuid: Value(t['solicitado_por_uuid'] as String?),
+              solicitadoEn: _fecha(t['solicitado_en']),
+              resueltoPorUuid: Value(t['resuelto_por_uuid'] as String?),
+              resueltoEn: Value(_fechaOpcional(t['resuelto_en'])),
+              motivoRechazo: Value(t['motivo_rechazo'] as String?),
+              updatedAt: Value(_fecha(t['updated_at'])),
+              deletedAt: Value(_fechaOpcional(t['deleted_at'])),
+            ),
+          );
+    }
+    return items.length;
+  }
+
+  Future<int> _aplicarTrasladoDetalles(dynamic bloque) async {
+    final items = _items(bloque);
+    for (final d in items) {
+      await db.into(db.trasladoDetalles).insertOnConflictUpdate(
+            TrasladoDetallesCompanion.insert(
+              uuid: d['uuid'] as String,
+              trasladoUuid: d['traslado_uuid'] as String,
+              productoUuid: Value(d['producto_uuid'] as String?),
+              descripcion: d['descripcion'] as String,
+              cantidad: _milesimas(d['cantidad']),
+            ),
+          );
+    }
+    return items.length;
+  }
+
+  Future<int> _aplicarTrasladoEventos(dynamic bloque) async {
+    final items = _items(bloque);
+    for (final e in items) {
+      await db.into(db.trasladoEventos).insertOnConflictUpdate(
+            TrasladoEventosCompanion.insert(
+              uuid: e['uuid'] as String,
+              trasladoUuid: e['traslado_uuid'] as String,
+              evento: e['evento'] as String,
+              usuarioUuid: Value(e['usuario_uuid'] as String?),
+              fecha: _fecha(e['fecha']),
+              nota: Value(e['nota'] as String?),
+            ),
+          );
+    }
+    return items.length;
+  }
+
+  Future<int> _aplicarSolicitudesAjuste(dynamic bloque, Set<String> bloqueados) async {
+    final items = _items(bloque).where((a) => !bloqueados.contains(a['uuid'])).toList();
+    for (final a in items) {
+      await db.into(db.solicitudesAjuste).insertOnConflictUpdate(
+            SolicitudesAjusteCompanion.insert(
+              uuid: a['uuid'] as String,
+              sedeUuid: a['sede_uuid'] as String,
+              productoUuid: a['producto_uuid'] as String,
+              tipo: a['tipo'] as String,
+              cantidad: Value(_milesimasOpcional(a['cantidad'])),
+              stockContado: Value(_milesimasOpcional(a['stock_contado'])),
+              motivo: Value(a['motivo'] as String?),
+              estado: Value(a['estado'] as String? ?? 'PENDIENTE'),
+              solicitadoPorUuid: Value(a['solicitado_por_uuid'] as String?),
+              solicitadoEn: _fecha(a['solicitado_en']),
+              resueltoPorUuid: Value(a['resuelto_por_uuid'] as String?),
+              resueltoEn: Value(_fechaOpcional(a['resuelto_en'])),
+              motivoRechazo: Value(a['motivo_rechazo'] as String?),
+              updatedAt: Value(_fecha(a['updated_at'])),
+            ),
+          );
+    }
+    return items.length;
+  }
+
+  Future<int> _aplicarCierres(dynamic bloque, Set<String> bloqueados) async {
+    final items = _items(bloque).where((c) => !bloqueados.contains(c['uuid'])).toList();
+    for (final c in items) {
+      await db.into(db.cierresCaja).insertOnConflictUpdate(
+            CierresCajaCompanion.insert(
+              uuid: c['uuid'] as String,
+              sedeUuid: c['sede_uuid'] as String,
+              usuarioUuid: Value(c['usuario_uuid'] as String?),
+              dispositivoUuid: Value(c['dispositivo_uuid'] as String?),
+              estado: Value(c['estado'] as String? ?? 'ABIERTO'),
+              abiertoEn: _fecha(c['abierto_en']),
+              baseEfectivo: Value(_centavos(c['base_efectivo'])),
+              cerradoEn: Value(_fechaOpcional(c['cerrado_en'])),
+              cierreTardio: Value(_bool(c['cierre_tardio'])),
+              esperadoTotal: Value(_centavosOpcional(c['esperado_total'])),
+              contadoTotal: Value(_centavosOpcional(c['contado_total'])),
+              diferenciaEfectivo: Value(_centavosOpcional(c['diferencia_efectivo'])),
+              detalle: Value(_textoJson(c['detalle'])),
+              notas: Value(c['notas'] as String?),
+              revisadoPorUuid: Value(c['revisado_por_uuid'] as String?),
+              revisadoEn: Value(_fechaOpcional(c['revisado_en'])),
+              updatedAt: Value(_fecha(c['updated_at'])),
+            ),
+          );
+    }
+    return items.length;
+  }
+
+  Future<int> _aplicarRecaudos(dynamic bloque, Set<String> bloqueados) async {
+    final items = _items(bloque).where((r) => !bloqueados.contains(r['uuid'])).toList();
+    for (final r in items) {
+      await db.into(db.recaudos).insertOnConflictUpdate(
+            RecaudosCompanion.insert(
+              uuid: r['uuid'] as String,
+              metodoPagoUuid: r['metodo_pago_uuid'] as String,
+              sedeUuid: Value(r['sede_uuid'] as String?),
+              fecha: r['fecha'] as String,
+              monto: _centavos(r['monto']),
+              comision: Value(_centavos(r['comision'])),
+              referencia: Value(r['referencia'] as String?),
+              notas: Value(r['notas'] as String?),
+              aplicaciones: Value(_textoJson(r['aplicaciones'])),
+              registradoPorUuid: Value(r['registrado_por_uuid'] as String?),
+              updatedAt: Value(_fecha(r['updated_at'])),
+              deletedAt: Value(_fechaOpcional(r['deleted_at'])),
+            ),
+          );
+    }
+    return items.length;
+  }
+
+  // ── Alcance ───────────────────────────────────────────────────────────────
+
+  /// ¿El servidor bajó los datos con otro alcance del que tenemos?
+  ///
+  /// Pasa al actualizar la app (no había huella) y cuando al usuario le cambian
+  /// las sedes o el rol. Lo que había se bajó con permisos que ya no aplican.
+  Future<bool> alcanceCambio(String? alcance) async {
+    if (alcance == null) return false;
+    final estado = await (db.select(db.estadoApp)..where((t) => t.id.equals(1))).getSingleOrNull();
+    return estado?.alcance != alcance;
+  }
+
+  /// Descarta lo que se bajó con el alcance anterior y reinicia los cursores
+  /// para volver a bajar desde cero lo que sí corresponde.
+  ///
+  /// **Nunca toca lo que aún no ha salido del teléfono**: una venta pendiente es
+  /// el único ejemplar de ese dinero. Por eso se borran sólo las filas ya
+  /// sincronizadas (o que no tienen una operación en la cola).
+  Future<void> reiniciarPorAlcance(String alcance) async {
+    await db.transaction(() async {
+      final pendientes = await _uuidsConCambiosPendientes();
+      final lista = pendientes.isEmpty ? <String>[''] : pendientes.toList();
+
+      await (db.delete(db.ventas)..where((t) => t.sincronizadaEn.isNotNull())).go();
+      await db.customUpdate(
+        'DELETE FROM venta_detalles WHERE venta_uuid NOT IN (SELECT uuid FROM ventas)',
+        updates: {db.ventaDetalles},
+        updateKind: UpdateKind.delete,
+      );
+      await db.customUpdate(
+        'DELETE FROM venta_pagos WHERE venta_uuid NOT IN (SELECT uuid FROM ventas)',
+        updates: {db.ventaPagos},
+        updateKind: UpdateKind.delete,
+      );
+      await (db.delete(db.movimientos)..where((t) => t.sincronizadoEn.isNotNull())).go();
+      await db.delete(db.alertas).go();
+      await db.delete(db.stockSedes).go();
+      await (db.delete(db.traslados)..where((t) => t.uuid.isNotIn(lista))).go();
+      await db.customUpdate(
+        'DELETE FROM traslado_detalles WHERE traslado_uuid NOT IN (SELECT uuid FROM traslados)',
+        updates: {db.trasladoDetalles},
+        updateKind: UpdateKind.delete,
+      );
+      await db.customUpdate(
+        'DELETE FROM traslado_eventos WHERE traslado_uuid NOT IN (SELECT uuid FROM traslados)',
+        updates: {db.trasladoEventos},
+        updateKind: UpdateKind.delete,
+      );
+      await (db.delete(db.solicitudesAjuste)..where((t) => t.uuid.isNotIn(lista))).go();
+      await (db.delete(db.cierresCaja)
+            ..where((t) => t.uuid.isNotIn(lista) & t.estado.equals('CERRADO')))
+          .go();
+      await (db.delete(db.recaudos)..where((t) => t.uuid.isNotIn(lista))).go();
+      await reiniciarCursores();
+      await (db.update(db.estadoApp)..where((t) => t.id.equals(1)))
+          .write(EstadoAppCompanion(alcance: Value(alcance)));
+    });
+  }
+
+  /// Rehace la proyección del stock en `productos` para la sede activa, desde
+  /// `stock_sedes`. Se usa al cambiar de sede activa.
+  Future<void> proyectarSedeActiva(String sedeUuid) async {
+    await db.transaction(() async {
+      await db.customUpdate(
+        'UPDATE productos SET '
+        'stock_actual = COALESCE((SELECT ss.stock_actual FROM stock_sedes ss '
+        '  WHERE ss.producto_uuid = productos.uuid AND ss.sede_uuid = ?), 0), '
+        'stock_minimo = COALESCE((SELECT ss.stock_minimo FROM stock_sedes ss '
+        '  WHERE ss.producto_uuid = productos.uuid AND ss.sede_uuid = ?), stock_minimo_general)',
+        variables: [Variable<String>(sedeUuid), Variable<String>(sedeUuid)],
+        updates: {db.productos},
+      );
+    });
+  }
+
+  /// Hora del servidor de la última respuesta: base del control de reloj.
+  Future<void> registrarHoraServidor(String? iso) async {
+    final servidor = iso == null ? null : DateTime.tryParse(iso)?.toUtc();
+    if (servidor == null) return;
+    final desfase = servidor.difference(DateTime.now().toUtc()).inMilliseconds;
+    await (db.update(db.estadoApp)..where((t) => t.id.equals(1))).write(
+      EstadoAppCompanion(horaServidor: Value(servidor), desfaseServidorMs: Value(desfase)),
+    );
   }
 
   Future<int> _aplicarConfiguracion(dynamic bloque) async {

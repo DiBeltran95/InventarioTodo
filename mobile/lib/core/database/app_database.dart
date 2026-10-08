@@ -32,6 +32,17 @@ class Usuarios extends Table {
   TextColumn get passwordHashLocal => text().nullable()();
   TextColumn get saltLocal => text().nullable()();
 
+  /// Jornada: con la restricción activa, sólo se puede trabajar dentro de los
+  /// tramos de `horario` (JSON) o con un acceso extra vigente. Baja con el
+  /// usuario para que el teléfono cierre la sesión al final del turno aunque
+  /// no haya red.
+  BoolColumn get restringirHorario => boolean().withDefault(const Constant(false))();
+  TextColumn get horario => text().nullable()();
+  DateTimeColumn get accesoExtraHasta => dateTime().nullable()();
+
+  /// UUID de sus sedes, separados por coma. Vacío para el Director General.
+  TextColumn get sedes => text().withDefault(const Constant(''))();
+
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
   DateTimeColumn get deletedAt => dateTime().nullable()();
 
@@ -94,8 +105,19 @@ class Productos extends Table {
   IntColumn get tasaIva => integer().withDefault(const Constant(1900))();
 
   /// Proyección local. Sólo la escribe `InventarioDao._aplicarMovimiento`.
+  ///
+  /// Desde la versión multisede es el stock de la **sede activa** del
+  /// dispositivo, no el total: la venta, el escáner y las alertas del catálogo
+  /// siguen leyendo esta columna sin saber de sedes. El de cada sede está en
+  /// `StockSedes`.
   IntColumn get stockActual => integer().withDefault(const Constant(0))();
+
+  /// Mínimo efectivo en la sede activa: el propio de la sede o, si no tiene,
+  /// el general.
   IntColumn get stockMinimo => integer().withDefault(const Constant(0))();
+
+  /// Mínimo general del producto, tal como lo define el catálogo.
+  IntColumn get stockMinimoGeneral => integer().withDefault(const Constant(0))();
   IntColumn get stockMaximo => integer().nullable()();
 
   TextColumn get imagenUrl => text().nullable()();
@@ -140,6 +162,10 @@ class Ventas extends Table {
   TextColumn get numero => text()();
   TextColumn get usuarioUuid => text().nullable()();
   TextColumn get dispositivoUuid => text().nullable()();
+  TextColumn get sedeUuid => text().nullable()();
+
+  /// Caja (cierres_caja.uuid) en la que se cobró.
+  TextColumn get turnoUuid => text().nullable()();
   TextColumn get clienteNombre => text().nullable()();
   TextColumn get clienteDocumento => text().nullable()();
 
@@ -214,8 +240,13 @@ class Movimientos extends Table {
   IntColumn get stockResultante => integer().nullable()();
 
   TextColumn get ventaUuid => text().nullable()();
+  TextColumn get sedeUuid => text().nullable()();
+  TextColumn get trasladoUuid => text().nullable()();
   TextColumn get proveedorUuid => text().nullable()();
   TextColumn get usuarioUuid => text().nullable()();
+
+  /// Quién aprobó el ajuste cuando lo solicitó un auxiliar de inventario.
+  TextColumn get aprobadoPorUuid => text().nullable()();
   TextColumn get lote => text().nullable()();
   TextColumn get venceEl => text().nullable()();
   TextColumn get documentoRef => text().nullable()();
@@ -235,6 +266,7 @@ class Alertas extends Table {
   TextColumn get tipo => text()();
   TextColumn get severidad => text().withDefault(const Constant('ADVERTENCIA'))();
   TextColumn get productoUuid => text().nullable()();
+  TextColumn get sedeUuid => text().nullable()();
   TextColumn get ventaUuid => text().nullable()();
   TextColumn get mensaje => text()();
   DateTimeColumn get resueltaEn => dateTime().nullable()();
@@ -272,6 +304,15 @@ class MetodosPago extends Table {
   TextColumn get qrLocal => text().nullable()();
 
   TextColumn get instrucciones => text().nullable()();
+
+  /// Sede a la que pertenece; null = todas. Una sede con su propio Nequi tiene
+  /// su propio medio, con su QR.
+  TextColumn get sedeUuid => text().nullable()();
+
+  /// Sólo entidades de crédito (Addi, Crediya…): comisión que retienen, en
+  /// centésimas de punto (5 % = 500), y días en que suelen pagar.
+  IntColumn get comisionPct => integer().nullable()();
+  IntColumn get diasPago => integer().nullable()();
   TextColumn get color => text().withDefault(const Constant('#0E6B5C'))();
   IntColumn get orden => integer().withDefault(const Constant(0))();
   BoolColumn get activo => boolean().withDefault(const Constant(true))();
@@ -306,9 +347,181 @@ class VentaPagos extends Table {
 
   TextColumn get referencia => text().nullable()();
 
+  /// Cuánto pagó ya la entidad de crédito (bruto, con su comisión).
+  IntColumn get cobrado => integer().withDefault(const Constant(0))();
+
   @override
   Set<Column> get primaryKey => {uuid};
 }
+
+// ─── Multisede ───────────────────────────────────────────────────────────────
+
+class Sedes extends Table {
+  TextColumn get uuid => text()();
+  TextColumn get nombre => text()();
+  TextColumn get codigo => text()();
+  TextColumn get direccion => text().nullable()();
+  TextColumn get telefono => text().nullable()();
+  BoolColumn get esPrincipal => boolean().withDefault(const Constant(false))();
+  BoolColumn get activo => boolean().withDefault(const Constant(true))();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get deletedAt => dateTime().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {uuid};
+}
+
+/// Stock de cada producto en cada sede visible para el usuario.
+///
+/// La sede activa se proyecta además en `productos.stockActual`; esta tabla es
+/// la que leen las vistas multisede (stock bajo por sede, traslados, inicio
+/// del director).
+@DataClassName('StockSede')
+class StockSedes extends Table {
+  TextColumn get productoUuid => text()();
+  TextColumn get sedeUuid => text()();
+  IntColumn get stockActual => integer().withDefault(const Constant(0))();
+
+  /// Mínimo propio de la sede; null = usa el general del producto.
+  IntColumn get stockMinimo => integer().nullable()();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {productoUuid, sedeUuid};
+}
+
+class Traslados extends Table {
+  TextColumn get uuid => text()();
+  TextColumn get numero => text()();
+  TextColumn get sedeOrigenUuid => text()();
+  TextColumn get sedeDestinoUuid => text()();
+
+  /// PENDIENTE · APROBADO · RECHAZADO · CANCELADO
+  TextColumn get estado => text().withDefault(const Constant('PENDIENTE'))();
+
+  /// GESTOR: lo aprueba un gerente de la sede origen o el director.
+  /// ORIGEN: lo confirma alguien de la sede origen.
+  TextColumn get confirma => text().withDefault(const Constant('GESTOR'))();
+  TextColumn get notas => text().nullable()();
+  TextColumn get solicitadoPorUuid => text().nullable()();
+  DateTimeColumn get solicitadoEn => dateTime()();
+  TextColumn get resueltoPorUuid => text().nullable()();
+  DateTimeColumn get resueltoEn => dateTime().nullable()();
+  TextColumn get motivoRechazo => text().nullable()();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get deletedAt => dateTime().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {uuid};
+}
+
+@DataClassName('TrasladoDetalle')
+class TrasladoDetalles extends Table {
+  TextColumn get uuid => text()();
+  TextColumn get trasladoUuid => text()();
+  TextColumn get productoUuid => text().nullable()();
+  TextColumn get descripcion => text()();
+  IntColumn get cantidad => integer()();
+
+  @override
+  Set<Column> get primaryKey => {uuid};
+}
+
+@DataClassName('TrasladoEvento')
+class TrasladoEventos extends Table {
+  TextColumn get uuid => text()();
+  TextColumn get trasladoUuid => text()();
+
+  /// CREADO · APROBADO · RECHAZADO · CANCELADO
+  TextColumn get evento => text()();
+  TextColumn get usuarioUuid => text().nullable()();
+  DateTimeColumn get fecha => dateTime()();
+  TextColumn get nota => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {uuid};
+}
+
+/// Conteo, merma o ajuste que pide un auxiliar de inventario. No toca el
+/// stock hasta que un gerente lo aprueba.
+@DataClassName('SolicitudAjuste')
+class SolicitudesAjuste extends Table {
+  TextColumn get uuid => text()();
+  TextColumn get sedeUuid => text()();
+  TextColumn get productoUuid => text()();
+
+  /// CONTEO · MERMA · AJUSTE
+  TextColumn get tipo => text()();
+  IntColumn get cantidad => integer().nullable()();
+  IntColumn get stockContado => integer().nullable()();
+  TextColumn get motivo => text().nullable()();
+
+  /// PENDIENTE · APROBADA · RECHAZADA
+  TextColumn get estado => text().withDefault(const Constant('PENDIENTE'))();
+  TextColumn get solicitadoPorUuid => text().nullable()();
+  DateTimeColumn get solicitadoEn => dateTime()();
+  TextColumn get resueltoPorUuid => text().nullable()();
+  DateTimeColumn get resueltoEn => dateTime().nullable()();
+  TextColumn get motivoRechazo => text().nullable()();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {uuid};
+}
+
+/// Turno de caja: se abre con una base de efectivo y se cierra contando.
+@DataClassName('CierreCaja')
+class CierresCaja extends Table {
+  TextColumn get uuid => text()();
+  TextColumn get sedeUuid => text()();
+  TextColumn get usuarioUuid => text().nullable()();
+  TextColumn get dispositivoUuid => text().nullable()();
+
+  /// ABIERTO · CERRADO
+  TextColumn get estado => text().withDefault(const Constant('ABIERTO'))();
+  DateTimeColumn get abiertoEn => dateTime()();
+  IntColumn get baseEfectivo => integer().withDefault(const Constant(0))();
+  DateTimeColumn get cerradoEn => dateTime().nullable()();
+  BoolColumn get cierreTardio => boolean().withDefault(const Constant(false))();
+
+  /// Las cifras del servidor, que recalcula lo esperado con las ventas del
+  /// turno. Mientras no llegan, la app muestra su propio cálculo.
+  IntColumn get esperadoTotal => integer().nullable()();
+  IntColumn get contadoTotal => integer().nullable()();
+  IntColumn get diferenciaEfectivo => integer().nullable()();
+
+  /// JSON por medio de pago: esperado, contado y diferencia.
+  TextColumn get detalle => text().nullable()();
+  TextColumn get notas => text().nullable()();
+  TextColumn get revisadoPorUuid => text().nullable()();
+  DateTimeColumn get revisadoEn => dateTime().nullable()();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {uuid};
+}
+
+/// Pago recibido de una entidad de crédito (Addi, Crediya…).
+class Recaudos extends Table {
+  TextColumn get uuid => text()();
+  TextColumn get metodoPagoUuid => text()();
+  TextColumn get sedeUuid => text().nullable()();
+  TextColumn get fecha => text()();
+  IntColumn get monto => integer()();
+  IntColumn get comision => integer().withDefault(const Constant(0))();
+  TextColumn get referencia => text().nullable()();
+  TextColumn get notas => text().nullable()();
+
+  /// JSON: a qué pagos se aplicó y cuánto.
+  TextColumn get aplicaciones => text().nullable()();
+  TextColumn get registradoPorUuid => text().nullable()();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get deletedAt => dateTime().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {uuid};
+}
+
 
 // ─── Sincronización ──────────────────────────────────────────────────────────
 
@@ -377,6 +590,24 @@ class EstadoApp extends Table {
   DateTimeColumn get offlineValidoHasta => dateTime().nullable()();
   DateTimeColumn get ultimoSyncExitoso => dateTime().nullable()();
 
+  /// Sede en la que opera este dispositivo. Lo que se venda o se mueva aquí
+  /// es de esa sede.
+  TextColumn get sedeActivaUuid => text().nullable()();
+
+  /// Huella del alcance (rol + sedes) con la que se bajaron los datos. Si el
+  /// servidor responde con otra, lo que ya no corresponde se descarta.
+  TextColumn get alcance => text().nullable()();
+
+  /// Última hora del servidor vista y el desfase del reloj del teléfono
+  /// respecto a ella. Sirven para no confiar en un reloj atrasado a propósito
+  /// para trabajar fuera de turno.
+  DateTimeColumn get horaServidor => dateTime().nullable()();
+  IntColumn get desfaseServidorMs => integer().withDefault(const Constant(0))();
+
+  /// Por qué se cerró la sesión a la fuerza (cuenta inhabilitada, fin de
+  /// turno). La pantalla de inicio lo muestra una vez.
+  TextColumn get motivoCierreSesion => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -396,6 +627,14 @@ class EstadoApp extends Table {
     MetodosPago,
     Movimientos,
     Alertas,
+    Sedes,
+    StockSedes,
+    Traslados,
+    TrasladoDetalles,
+    TrasladoEventos,
+    SolicitudesAjuste,
+    CierresCaja,
+    Recaudos,
     SyncOutbox,
     SyncCursores,
     Configuracion,
@@ -407,7 +646,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'inventario_pos'));
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -434,6 +673,50 @@ class AppDatabase extends _$AppDatabase {
             await m.createTable(metodosPago);
             await m.createTable(ventaPagos);
           }
+
+          // v3 · Multisede: sedes, stock por sede, traslados, horarios,
+          // ajustes por aprobación, cierres de caja y cuentas por cobrar.
+          if (desde < 3) {
+            for (final tabla in <TableInfo>[
+              sedes,
+              stockSedes,
+              traslados,
+              trasladoDetalles,
+              trasladoEventos,
+              solicitudesAjuste,
+              cierresCaja,
+              recaudos,
+            ]) {
+              await m.createTable(tabla);
+            }
+            // Si se viene de v1, las tablas de v2 se acaban de crear con todas
+            // sus columnas; si se viene de v2, hay que añadírselas.
+            if (desde >= 2) {
+              await m.addColumn(metodosPago, metodosPago.sedeUuid);
+              await m.addColumn(metodosPago, metodosPago.comisionPct);
+              await m.addColumn(metodosPago, metodosPago.diasPago);
+              await m.addColumn(ventaPagos, ventaPagos.cobrado);
+            }
+            await m.addColumn(usuarios, usuarios.restringirHorario);
+            await m.addColumn(usuarios, usuarios.horario);
+            await m.addColumn(usuarios, usuarios.accesoExtraHasta);
+            await m.addColumn(usuarios, usuarios.sedes);
+            await m.addColumn(productos, productos.stockMinimoGeneral);
+            await m.addColumn(ventas, ventas.sedeUuid);
+            await m.addColumn(ventas, ventas.turnoUuid);
+            await m.addColumn(movimientos, movimientos.sedeUuid);
+            await m.addColumn(movimientos, movimientos.trasladoUuid);
+            await m.addColumn(movimientos, movimientos.aprobadoPorUuid);
+            await m.addColumn(alertas, alertas.sedeUuid);
+            await m.addColumn(estadoApp, estadoApp.sedeActivaUuid);
+            await m.addColumn(estadoApp, estadoApp.alcance);
+            await m.addColumn(estadoApp, estadoApp.horaServidor);
+            await m.addColumn(estadoApp, estadoApp.desfaseServidorMs);
+            await m.addColumn(estadoApp, estadoApp.motivoCierreSesion);
+
+            // El mínimo que había era el general.
+            await customStatement('UPDATE productos SET stock_minimo_general = stock_minimo');
+          }
         },
         beforeOpen: (details) async {
           // Las claves foráneas no están declaradas entre tablas a propósito
@@ -455,10 +738,14 @@ class AppDatabase extends _$AppDatabase {
   /// forma definitiva o al cambiar de servidor.
   Future<void> limpiarDatos() async {
     await transaction(() async {
+      // Todas las tablas de datos. Antes faltaban `venta_pagos` y
+      // `metodos_pago`: tras «borrar datos» el teléfono seguía mostrando los
+      // medios de pago de la base anterior.
       final tablas = <TableInfo<Table, dynamic>>[
-        ventaDetalles, ventas, movimientos, alertas, productoCodigos,
-        productos, categorias, proveedores, usuarios, syncOutbox,
-        syncCursores, configuracion,
+        ventaDetalles, ventaPagos, ventas, movimientos, alertas, productoCodigos,
+        productos, categorias, proveedores, metodosPago, usuarios, syncOutbox,
+        syncCursores, configuracion, sedes, stockSedes, traslados,
+        trasladoDetalles, trasladoEventos, solicitudesAjuste, cierresCaja, recaudos,
       ];
       for (final tabla in tablas) {
         await delete(tabla).go();

@@ -157,6 +157,17 @@ class VentasDao {
       await (db.update(db.estadoApp)..where((t) => t.id.equals(1)))
           .write(EstadoAppCompanion(secuenciaFolio: Value(secuencia)));
 
+      // Sede y turno de caja. La venta es de la sede activa del teléfono y de
+      // la caja abierta de quien cobra: así el cierre del turno sabe
+      // exactamente qué ventas le corresponden.
+      final vendedor = usuarioUuid ?? estado.usuarioUuid;
+      final turno = vendedor == null
+          ? null
+          : await (db.select(db.cierresCaja)
+                ..where((t) => t.usuarioUuid.equals(vendedor) & t.estado.equals('ABIERTO'))
+                ..limit(1))
+              .getSingleOrNull();
+
       // 2. Cálculo exacto, línea a línea.
       final calculadas = <({LineaParaVender linea, LineaCalculada calculo})>[];
       for (final l in lineas) {
@@ -188,8 +199,10 @@ class VentasDao {
             VentasCompanion.insert(
               uuid: ventaUuid,
               numero: numero,
-              usuarioUuid: Value(usuarioUuid),
+              usuarioUuid: Value(vendedor),
               dispositivoUuid: Value(estado.dispositivoUuid),
+              sedeUuid: Value(estado.sedeActivaUuid),
+              turnoUuid: Value(turno?.uuid),
               clienteNombre: Value(clienteNombre),
               clienteDocumento: Value(clienteDocumento),
               subtotal: Value(subtotal.centavos),
@@ -348,6 +361,7 @@ class VentasDao {
           'fecha': ahora.toIso8601String(),
           'fecha_local': fechaLocal,
           'creada_offline': true,
+          'turno_uuid': turno?.uuid,
           'lineas': lineasPayload,
           'pagos': pagosPayload,
         },
@@ -389,6 +403,7 @@ class VentasDao {
               numero: '${venta.numero}-R',
               usuarioUuid: Value(usuarioUuid),
               dispositivoUuid: Value(venta.dispositivoUuid),
+              sedeUuid: Value(venta.sedeUuid),
               subtotal: Value(-venta.subtotal),
               descuentoTotal: Value(-venta.descuentoTotal),
               impuestoTotal: Value(-venta.impuestoTotal),
@@ -431,6 +446,7 @@ class VentasDao {
             tipo: 'ANULACION_VENTA',
             cantidad: Cantidad(d.cantidad),
             ventaUuid: reversaUuid,
+            sedeUuid: venta.sedeUuid,
             usuarioUuid: usuarioUuid,
             motivo: 'Anulación de ${venta.numero}: $motivo',
             fecha: ahora,
@@ -478,12 +494,19 @@ class VentasDao {
     /// Filtra por empleado. Lo usa el control de cajas del administrador, y
     /// también restringe al vendedor a ver únicamente sus propias ventas.
     String? usuarioUuid,
+
+    /// Sedes a mostrar. null = todas las que hay en el teléfono (que ya son
+    /// sólo las del alcance del usuario).
+    List<String>? sedes,
     int limite = 200,
   }) {
     final consulta = db.select(db.ventas)..where((t) => t.deletedAt.isNull());
 
     if (usuarioUuid != null) {
       consulta.where((t) => t.usuarioUuid.equals(usuarioUuid));
+    }
+    if (sedes != null) {
+      consulta.where((t) => t.sedeUuid.isIn(sedes));
     }
 
     if (estado != null) {

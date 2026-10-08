@@ -142,7 +142,7 @@ class VentaDetallePage extends ConsumerWidget {
                 ),
               ),
 
-              if (ref.watch(esAdminProvider) && v.costoTotal != 0) ...[
+              if (ref.watch(esGestorProvider) && v.costoTotal != 0) ...[
                 const SizedBox(height: 16),
                 Card(
                   child: Padding(
@@ -331,7 +331,7 @@ class _Cabecera extends ConsumerWidget {
     // una rama condicional se parsea como un `? [lista] :` anidado y el
     // compilador se pierde.
     String? vendedor;
-    if (ref.watch(esAdminProvider) && v.usuarioUuid != null) {
+    if (ref.watch(esGestorProvider) && v.usuarioUuid != null) {
       vendedor = ref.watch(nombresUsuariosProvider).value?[v.usuarioUuid!];
     }
 

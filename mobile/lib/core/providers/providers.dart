@@ -4,14 +4,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/datos_negocio.dart';
 import '../database/app_database.dart';
+import '../database/daos/ajustes_dao.dart';
 import '../database/daos/categorias_dao.dart';
+import '../database/daos/cierres_dao.dart';
 import '../database/daos/inventario_dao.dart';
 import '../database/daos/metodos_pago_dao.dart';
 import '../database/daos/outbox_dao.dart';
 import '../database/daos/productos_dao.dart';
 import '../database/daos/proveedores_dao.dart';
+import '../database/daos/recaudos_dao.dart';
 import '../database/daos/reportes_dao.dart';
+import '../database/daos/sedes_dao.dart';
 import '../database/daos/sync_dao.dart';
+import '../database/daos/traslados_dao.dart';
 import '../database/daos/ventas_dao.dart';
 import '../network/api_client.dart';
 import '../network/token_store.dart';
@@ -77,6 +82,52 @@ final syncDaoProvider = Provider<SyncDao>(
 
 final reportesDaoProvider = Provider<ReportesDao>(
   (ref) => ReportesDao(ref.watch(appDatabaseProvider)),
+);
+
+final sedesDaoProvider = Provider<SedesDao>(
+  (ref) => SedesDao(ref.watch(appDatabaseProvider), ref.watch(syncDaoProvider)),
+);
+
+final trasladosDaoProvider = Provider<TrasladosDao>(
+  (ref) => TrasladosDao(
+    ref.watch(appDatabaseProvider),
+    ref.watch(outboxDaoProvider),
+    ref.watch(inventarioDaoProvider),
+  ),
+);
+
+final ajustesDaoProvider = Provider<AjustesDao>(
+  (ref) => AjustesDao(
+    ref.watch(appDatabaseProvider),
+    ref.watch(outboxDaoProvider),
+    ref.watch(inventarioDaoProvider),
+  ),
+);
+
+final cierresDaoProvider = Provider<CierresDao>(
+  (ref) => CierresDao(ref.watch(appDatabaseProvider), ref.watch(outboxDaoProvider)),
+);
+
+final recaudosDaoProvider = Provider<RecaudosDao>(
+  (ref) => RecaudosDao(ref.watch(appDatabaseProvider), ref.watch(outboxDaoProvider)),
+);
+
+// ── Sedes ────────────────────────────────────────────────────────────────────
+
+/// Sede en la que opera este teléfono.
+final sedeActivaProvider = StreamProvider<Sede?>(
+  (ref) => ref.watch(sedesDaoProvider).observarSedeActiva(),
+);
+
+/// Todas las sedes activas del negocio (para elegir destino de un traslado o
+/// pedir un cambio de sede).
+final sedesActivasProvider = StreamProvider<List<Sede>>(
+  (ref) => ref.watch(sedesDaoProvider).observarActivas(),
+);
+
+/// Índice uuid → sede, también inactivas, para mostrar nombres.
+final indiceSedesProvider = StreamProvider<Map<String, Sede>>(
+  (ref) => ref.watch(sedesDaoProvider).observarIndice(),
 );
 
 // ── Sincronización ───────────────────────────────────────────────────────────

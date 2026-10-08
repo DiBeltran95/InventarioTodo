@@ -40,7 +40,10 @@ dependencies:
   flutter_animate: ^4.5.2
   shimmer: ^3.0.0
   fl_chart: ^1.2.0
-  intl: 0.20.2 # fijado por flutter_localizations del SDK
+  # Rango y no versión fija: flutter_localizations la fija según el SDK (3.44
+  # pide 0.20.2 exacta, 3.47 pide ^0.20.3). Con un valor fijo, el proyecto no
+  # resolvía en una máquina con un Flutter distinto al del CI.
+  intl: ^0.20.2
 
   # ── Tickets y etiquetas ───────────────────────────────────────────────────
   pdf: ^3.13.0
