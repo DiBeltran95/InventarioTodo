@@ -183,15 +183,32 @@ async function enviar(rutaFixtures, rutaOps) {
 
   const stock = (sede) =>
     Number((d.stock_sedes ?? []).find((s) => s.producto_uuid === f.producto.uuid && s.sede_uuid === sede)?.stock_actual ?? NaN);
-  // Traslado de 3, venta en efectivo de 1, merma de 1, venta a crédito de 1.
+  // Traslados: 2 despachadas de 3 solicitadas + 1 movida directamente. Luego
+  // venta en efectivo de 1, merma de 1 y venta a crédito de 1.
   afirmar(stock(f.principal.uuid) === f.producto.stock_principal - 6, `la principal queda en ${f.producto.stock_principal - 6}`, `hay ${stock(f.principal.uuid)}`);
   afirmar(stock(f.nueva.uuid) === 3, 'la sede nueva recibe 3', `hay ${stock(f.nueva.uuid)}`);
 
   const movs = new Map((d.movimientos_inventario ?? []).map((m) => [m.uuid, m]));
   const aprobacion = op('TRASLADO_APROBAR');
-  for (const m of aprobacion?.movimientos ?? []) {
-    afirmar(movs.get(m.salida_uuid)?.sede_uuid === f.principal.uuid, 'la salida del traslado tiene el uuid que generó la app');
-    afirmar(movs.get(m.entrada_uuid)?.sede_uuid === f.nueva.uuid, 'y la entrada también');
+  const directo = ops.find((o) => o.tipo === 'TRASLADO_CREAR' && o.payload.directo)?.payload;
+  for (const [nombre, payload, unidades] of [
+    ['el despacho parcial', aprobacion, 2],
+    ['el movimiento directo', directo, 1],
+  ]) {
+    for (const m of payload?.movimientos ?? []) {
+      const salida = movs.get(m.salida_uuid);
+      const entrada = movs.get(m.entrada_uuid);
+      afirmar(
+        salida?.sede_uuid === f.principal.uuid && Number(salida?.cantidad) === -unidades,
+        `${nombre}: la salida tiene el uuid de la app y ${unidades} unidad(es)`,
+        JSON.stringify(salida),
+      );
+      afirmar(
+        entrada?.sede_uuid === f.nueva.uuid && Number(entrada?.cantidad) === unidades,
+        `${nombre}: y la entrada también`,
+        JSON.stringify(entrada),
+      );
+    }
   }
   const lineasVenta = ops.filter((o) => o.tipo === 'VENTA_CREAR').flatMap((o) => o.payload.lineas ?? []);
   afirmar(
@@ -204,7 +221,15 @@ async function enviar(rutaFixtures, rutaOps) {
   afirmar(movAjuste?.usuario_uuid === f.usuarios.auxiliar.uuid, 'a nombre del auxiliar que la pidió', JSON.stringify(movAjuste));
 
   const traslado = (d.traslados ?? []).find((t) => t.uuid === op('TRASLADO_CREAR')?.uuid);
-  afirmar(traslado?.estado === 'APROBADO', 'el traslado queda APROBADO');
+  afirmar(traslado?.estado === 'APROBADO' && traslado?.tipo === 'SOLICITUD', 'la solicitud queda despachada');
+  const lineaParcial = (d.traslado_detalles ?? []).find((x) => x.traslado_uuid === traslado?.uuid);
+  afirmar(
+    Number(lineaParcial?.cantidad) === 3 && Number(lineaParcial?.cantidad_enviada) === 2,
+    'con 2 enviadas de 3 pedidas',
+    JSON.stringify(lineaParcial),
+  );
+  const movido = (d.traslados ?? []).find((t) => t.uuid === directo?.uuid);
+  afirmar(movido?.estado === 'APROBADO' && movido?.tipo === 'DIRECTO', 'el movimiento directo nace despachado');
 
   const turno = op('CIERRE_ABRIR')?.uuid;
   const ventaEfectivo = (d.ventas ?? []).find((v) => v.uuid === ops.filter((o) => o.tipo === 'VENTA_CREAR')[0]?.payload.uuid);

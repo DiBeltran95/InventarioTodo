@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/database/app_database.dart';
+import '../../../core/database/daos/sedes_dao.dart';
 import '../../../core/database/daos/traslados_dao.dart';
 import '../../../core/money/money.dart';
 import '../../../core/negocio/traslados.dart';
@@ -9,6 +11,7 @@ import '../../../core/providers/providers.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/fechas.dart';
 import '../../../core/widgets/estados.dart';
+import '../../disponibilidad/presentation/disponibilidad_widgets.dart';
 import '../../sedes/presentation/sedes_providers.dart';
 import 'traslados_page.dart';
 
@@ -16,17 +19,31 @@ final _detalleProvider = StreamProvider.autoDispose.family<TrasladoCompleto?, St
   (ref, uuid) => ref.watch(trasladosDaoProvider).observarDetalle(uuid),
 );
 
-/// Un traslado: qué se mueve, entre qué sedes, y su historial completo —quién
-/// lo pidió, quién lo aprobó o rechazó, y cuándo—. Las acciones sólo aparecen
-/// para quien puede usarlas.
-class TrasladoDetallePage extends ConsumerWidget {
+/// Un traslado: qué se pide o se movió, entre qué sedes, y su historial
+/// completo —quién lo pidió, quién lo despachó o rechazó, y cuándo—.
+///
+/// A quien despacha (el auxiliar de la sede origen o el director) le deja
+/// elegir cuántas unidades salen de cada producto: lo pedido por defecto, o
+/// menos si no hay o no conviene. Las acciones sólo aparecen para quien puede
+/// usarlas.
+class TrasladoDetallePage extends ConsumerStatefulWidget {
   const TrasladoDetallePage({super.key, required this.uuid});
 
   final String uuid;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final detalle = ref.watch(_detalleProvider(uuid));
+  ConsumerState<TrasladoDetallePage> createState() => _TrasladoDetallePageState();
+}
+
+class _TrasladoDetallePageState extends ConsumerState<TrasladoDetallePage> {
+  /// Lo que quien despacha decidió enviar por línea (uuid → cantidad). Una
+  /// línea sin tocar sale con lo pedido, tope en lo que haya en el origen.
+  final _enviar = <String, Cantidad>{};
+  bool _enviando = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final detalle = ref.watch(_detalleProvider(widget.uuid));
     final actor = ref.watch(actorProvider);
 
     return Scaffold(
@@ -39,18 +56,12 @@ class TrasladoDetallePage extends ConsumerWidget {
             return const EstadoVacio(icono: Icons.search_off_rounded, titulo: 'No se encontró el traslado');
           }
           final t = d.resumen.traslado;
-          final (color, fondo, icono, texto) = estiloEstado(context, t.estado);
-          final puedeResolver = actor != null &&
-              motivoNoPuedeResolver(
-                    estado: t.estado,
-                    confirma: t.confirma,
-                    sedeOrigen: t.sedeOrigenUuid,
-                    solicitadoPor: t.solicitadoPorUuid,
-                    actor: actor,
-                  ) ==
-                  null;
+          final (color, fondo, icono, texto) = estiloEstado(context, t.estado, directo: d.resumen.directo);
+          final puedeDespachar = actor != null &&
+              motivoNoPuedeDespachar(estado: t.estado, sedeOrigen: t.sedeOrigenUuid, actor: actor) == null;
           final puedeCancelar = actor != null &&
               motivoNoPuedeCancelar(estado: t.estado, solicitadoPor: t.solicitadoPorUuid, actor: actor) == null;
+          final origen = d.resumen.origen?.nombre ?? 'la sede de origen';
 
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -65,6 +76,10 @@ class TrasladoDetallePage extends ConsumerWidget {
                         Icon(icono, color: color),
                         const SizedBox(width: 8),
                         Text(texto, style: context.textos.titleMedium?.copyWith(color: color)),
+                        if (d.parcial) ...[
+                          const SizedBox(width: 8),
+                          Text('· parcial', style: context.textos.labelLarge?.copyWith(color: color)),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 14),
@@ -87,9 +102,10 @@ class TrasladoDetallePage extends ConsumerWidget {
               if (t.estado == 'PENDIENTE') ...[
                 const SizedBox(height: 12),
                 Text(
-                  t.confirma == 'GESTOR'
-                      ? 'Lo pidió un empleado: lo aprueba el gerente de ${d.resumen.origen?.nombre ?? 'la sede de origen'} o el director.'
-                      : 'Lo pidió un gerente: lo confirma alguien de ${d.resumen.origen?.nombre ?? 'la sede de origen'} al despacharlo.',
+                  puedeDespachar
+                      ? 'Elige cuántas unidades salen de cada producto. Puedes enviar menos de lo pedido.'
+                      : 'Lo despacha el auxiliar de inventario de $origen o el Director General. '
+                          'Pueden enviar menos de lo pedido.',
                   style: context.textos.bodySmall?.copyWith(color: context.colores.onSurfaceVariant),
                 ),
               ],
@@ -97,39 +113,42 @@ class TrasladoDetallePage extends ConsumerWidget {
               Text('Productos', style: context.textos.titleMedium),
               const SizedBox(height: 6),
               for (final l in d.detalles)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.inventory_2_outlined),
-                  title: Text(l.descripcion),
-                  trailing: Text(Cantidad(l.cantidad).format(), style: context.textos.titleMedium),
-                ),
+                puedeDespachar
+                    ? _LineaDespacho(
+                        linea: l,
+                        sedeOrigen: t.sedeOrigenUuid,
+                        valor: _enviar[l.uuid],
+                        onCambio: (c) => setState(() => _enviar[l.uuid] = c),
+                      )
+                    : _LineaResumen(linea: l),
               const SizedBox(height: 20),
               Text('Historial', style: context.textos.titleMedium),
               const SizedBox(height: 8),
-              for (final e in d.eventos) _Evento(evento: e.evento.evento, quien: e.usuario?.nombre, fecha: e.evento.fecha, nota: e.evento.nota),
-              if (puedeResolver || puedeCancelar) ...[
+              for (final e in d.eventos)
+                _Evento(
+                  evento: e.evento.evento,
+                  directo: d.resumen.directo,
+                  quien: e.usuario?.nombre,
+                  fecha: e.evento.fecha,
+                  nota: e.evento.nota,
+                ),
+              if (puedeDespachar || puedeCancelar) ...[
                 const SizedBox(height: 24),
-                if (puedeResolver)
-                  FilledButton.icon(
-                    onPressed: () => _aprobar(context, ref, t.confirma),
-                    icon: const Icon(Icons.check_rounded),
-                    label: Text(t.confirma == 'GESTOR' ? 'Aprobar y mover el stock' : 'Confirmar despacho'),
-                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(54)),
-                  ),
-                if (puedeResolver) ...[
+                if (puedeDespachar) _BotonDespachar(detalle: d, enviar: _enviar, enviando: _enviando, onDespachar: _despachar),
+                if (puedeDespachar) ...[
                   const SizedBox(height: 10),
                   OutlinedButton.icon(
-                    onPressed: () => _rechazar(context, ref),
+                    onPressed: _enviando ? null : _rechazar,
                     icon: const Icon(Icons.close_rounded),
                     label: const Text('Rechazar'),
                     style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                   ),
                 ],
-                if (puedeCancelar && !puedeResolver)
+                if (puedeCancelar && !puedeDespachar)
                   OutlinedButton.icon(
-                    onPressed: () => _cancelar(context, ref),
+                    onPressed: _enviando ? null : _cancelar,
                     icon: const Icon(Icons.block_rounded),
-                    label: const Text('Cancelar traslado'),
+                    label: const Text('Cancelar solicitud'),
                     style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                   ),
               ],
@@ -140,45 +159,165 @@ class TrasladoDetallePage extends ConsumerWidget {
     );
   }
 
-  Future<void> _aprobar(BuildContext context, WidgetRef ref, String confirma) async {
+  Future<void> _despachar(Map<String, Cantidad> enviadas, Cantidad total) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (d) => AlertDialog(
-        title: Text(confirma == 'GESTOR' ? '¿Aprobar el traslado?' : '¿Confirmar el despacho?'),
-        content: const Text('El stock sale de la sede de origen y entra en la de destino ahora mismo.'),
+        title: Text('¿Despachar ${total.format()} unidades?'),
+        content: const Text('Salen de la sede de origen y entran en la de destino ahora mismo.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Volver')),
-          FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Sí, mover')),
+          FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Sí, despachar')),
         ],
       ),
     );
-    if (ok != true || !context.mounted) return;
-    await _ejecutar(context, ref, () => ref.read(trasladosDaoProvider).aprobar(uuid), 'Traslado aprobado');
-  }
-
-  Future<void> _rechazar(BuildContext context, WidgetRef ref) async {
-    final motivo = await _pedirMotivo(context, '¿Por qué lo rechazas?');
-    if (motivo == null || !context.mounted) return;
+    if (ok != true || !mounted) return;
     await _ejecutar(
-      context,
-      ref,
-      () => ref.read(trasladosDaoProvider).rechazar(uuid, motivo: motivo),
-      'Traslado rechazado',
+      () => ref.read(trasladosDaoProvider).despachar(widget.uuid, enviadas: enviadas),
+      'Traslado despachado',
     );
   }
 
-  Future<void> _cancelar(BuildContext context, WidgetRef ref) =>
-      _ejecutar(context, ref, () => ref.read(trasladosDaoProvider).cancelar(uuid), 'Traslado cancelado');
+  Future<void> _rechazar() async {
+    final motivo = await _pedirMotivo(context, '¿Por qué lo rechazas?');
+    if (motivo == null || !mounted) return;
+    await _ejecutar(
+      () => ref.read(trasladosDaoProvider).rechazar(widget.uuid, motivo: motivo),
+      'Solicitud rechazada',
+    );
+  }
 
-  Future<void> _ejecutar(BuildContext context, WidgetRef ref, Future<void> Function() accion, String ok) async {
+  Future<void> _cancelar() =>
+      _ejecutar(() => ref.read(trasladosDaoProvider).cancelar(widget.uuid), 'Solicitud cancelada');
+
+  Future<void> _ejecutar(Future<void> Function() accion, String ok) async {
+    setState(() => _enviando = true);
     try {
       await accion();
       ref.read(syncEngineProvider).solicitar();
       await HapticFeedback.mediumImpact();
-      if (context.mounted) mostrarMensaje(context, ok, esExito: true);
+      if (mounted) mostrarMensaje(context, ok, esExito: true);
     } catch (e) {
-      if (context.mounted) mostrarMensaje(context, '$e'.replaceFirst('Bad state: ', ''), esError: true);
+      if (mounted) mostrarMensaje(context, '$e'.replaceFirst('Bad state: ', ''), esError: true);
+    } finally {
+      if (mounted) setState(() => _enviando = false);
     }
+  }
+}
+
+/// Cuánto hay de un producto en una sede, según el teléfono.
+Cantidad _hayEn(List<StockEnSede> filas, String sede) =>
+    filas.where((f) => f.sede.uuid == sede).firstOrNull?.stock ?? const Cantidad(0);
+
+/// Lo que sale de una línea si quien despacha no la toca: lo pedido, con tope
+/// en lo que hay.
+Cantidad _porDefecto(TrasladoDetalle l, Cantidad hay) {
+  final pedida = Cantidad(l.cantidad);
+  if (hay.esNegativa) return const Cantidad(0);
+  return pedida > hay ? hay : pedida;
+}
+
+class _LineaDespacho extends ConsumerWidget {
+  const _LineaDespacho({required this.linea, required this.sedeOrigen, required this.valor, required this.onCambio});
+
+  final TrasladoDetalle linea;
+  final String sedeOrigen;
+  final Cantidad? valor;
+  final ValueChanged<Cantidad> onCambio;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filas = linea.productoUuid == null
+        ? const <StockEnSede>[]
+        : ref.watch(disponibilidadProvider(linea.productoUuid!)).value ?? const <StockEnSede>[];
+    final hay = _hayEn(filas, sedeOrigen);
+    final enviar = valor ?? _porDefecto(linea, hay);
+    final pedida = Cantidad(linea.cantidad);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(linea.descripcion, style: context.textos.titleSmall),
+            Text(
+              'Pidieron ${pedida.format()} · hay ${hay.format()} en el origen',
+              style: context.textos.bodySmall?.copyWith(
+                color: hay < pedida ? context.dominio.advertencia : context.colores.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 4),
+            SelectorCantidad(
+              valor: enviar,
+              maximo: hay.esNegativa ? const Cantidad(0) : hay,
+              onCambio: onCambio,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LineaResumen extends StatelessWidget {
+  const _LineaResumen({required this.linea});
+
+  final TrasladoDetalle linea;
+
+  @override
+  Widget build(BuildContext context) {
+    final pedida = Cantidad(linea.cantidad);
+    final enviada = linea.cantidadEnviada == null ? null : Cantidad(linea.cantidadEnviada!);
+    final parcial = enviada != null && enviada != pedida;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.inventory_2_outlined),
+      title: Text(linea.descripcion),
+      subtitle: parcial ? Text('Pidieron ${pedida.format()}') : null,
+      trailing: Text(
+        parcial ? 'Salieron ${enviada.format()}' : (enviada ?? pedida).format(),
+        style: context.textos.titleMedium?.copyWith(color: parcial ? context.dominio.advertencia : null),
+      ),
+    );
+  }
+}
+
+/// «Despachar N unidades»: suma lo elegido en cada línea (o lo que sale por
+/// defecto) y no deja despachar cero.
+class _BotonDespachar extends ConsumerWidget {
+  const _BotonDespachar({required this.detalle, required this.enviar, required this.enviando, required this.onDespachar});
+
+  final TrasladoCompleto detalle;
+  final Map<String, Cantidad> enviar;
+  final bool enviando;
+  final Future<void> Function(Map<String, Cantidad> enviadas, Cantidad total) onDespachar;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final origen = detalle.resumen.traslado.sedeOrigenUuid;
+    final enviadas = <String, Cantidad>{};
+    for (final l in detalle.detalles) {
+      final filas = l.productoUuid == null
+          ? const <StockEnSede>[]
+          : ref.watch(disponibilidadProvider(l.productoUuid!)).value ?? const <StockEnSede>[];
+      enviadas[l.uuid] = enviar[l.uuid] ?? _porDefecto(l, _hayEn(filas, origen));
+    }
+    final total = Cantidad.sumar(enviadas.values);
+    final completo = detalle.detalles.every((l) => enviadas[l.uuid]!.milesimas == l.cantidad);
+
+    return FilledButton.icon(
+      onPressed: enviando || total.milesimas <= 0 ? null : () => onDespachar(enviadas, total),
+      icon: const Icon(Icons.local_shipping_outlined),
+      label: Text(
+        total.milesimas <= 0
+            ? 'No hay nada para enviar'
+            : completo
+                ? 'Despachar todo (${total.format()})'
+                : 'Despachar ${total.format()} unidades',
+      ),
+      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(54)),
+    );
   }
 }
 
@@ -224,9 +363,10 @@ class _Sede extends StatelessWidget {
 }
 
 class _Evento extends StatelessWidget {
-  const _Evento({required this.evento, required this.quien, required this.fecha, this.nota});
+  const _Evento({required this.evento, required this.directo, required this.quien, required this.fecha, this.nota});
 
   final String evento;
+  final bool directo;
   final String? quien;
   final DateTime fecha;
   final String? nota;
@@ -234,10 +374,10 @@ class _Evento extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (icono, texto) = switch (evento) {
-      'APROBADO' => (Icons.check_circle_outline_rounded, 'Aprobado'),
+      'APROBADO' => (Icons.local_shipping_outlined, directo ? 'Movido' : 'Despachado'),
       'RECHAZADO' => (Icons.cancel_outlined, 'Rechazado'),
       'CANCELADO' => (Icons.block_rounded, 'Cancelado'),
-      _ => (Icons.add_circle_outline_rounded, 'Pedido'),
+      _ => (Icons.add_circle_outline_rounded, directo ? 'Registrado' : 'Solicitado'),
     };
     return ListTile(
       contentPadding: EdgeInsets.zero,

@@ -70,7 +70,11 @@ class StockBajoPage extends ConsumerWidget {
                       item: item,
                       esSedeActiva: item.sede.uuid == activa?.uuid,
                       puedeEntrada: rol.puedeRegistrarEntradas,
-                      puedeTraslado: rol.pideTraslados,
+                      // El gerente lo solicita a otra sede; el director lo trae
+                      // él mismo. El auxiliar no pide: registra la entrada.
+                      textoTraslado: rol.solicitaTraslados
+                          ? 'Solicitar'
+                          : (rol.esDirector ? 'Traer de otra sede' : null),
                     ),
                   ),
               ],
@@ -87,13 +91,15 @@ class _Fila extends StatelessWidget {
     required this.item,
     required this.esSedeActiva,
     required this.puedeEntrada,
-    required this.puedeTraslado,
+    required this.textoTraslado,
   });
 
   final StockBajo item;
   final bool esSedeActiva;
   final bool puedeEntrada;
-  final bool puedeTraslado;
+
+  /// null = quien mira no solicita ni mueve unidades.
+  final String? textoTraslado;
 
   @override
   Widget build(BuildContext context) {
@@ -139,13 +145,13 @@ class _Fila extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                if (puedeTraslado)
+                if (textoTraslado != null)
                   TextButton.icon(
                     onPressed: () => context.push(
                       '${Rutas.trasladoNuevo}?producto=${item.producto.uuid}&destino=${item.sede.uuid}',
                     ),
                     icon: const Icon(Icons.swap_horiz_rounded, size: 18),
-                    label: const Text('Pedir traslado'),
+                    label: Text(textoTraslado!),
                   ),
                 // La entrada se registra en la sede activa del teléfono: sólo
                 // tiene sentido ofrecerla para esa sede.

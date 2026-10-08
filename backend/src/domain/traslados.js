@@ -1,69 +1,104 @@
 /**
  * Reglas de los traslados entre sedes (flujo simple: el stock se mueve al
- * aprobar).
+ * despachar, sin estado «en tránsito»).
  *
- * Siempre confirma «la otra parte», nunca quien lo pidió:
+ * Quién hace qué:
  *
- *   · Lo pide un EMPLEADO (vendedor) → lo aprueba un gestor —gerente de la
- *     sede origen o el director—: es mercancía que sale de su sede.
- *   · Lo pide un GESTOR («solicitarlo a los empleados de esa sede») → lo
- *     confirma alguien de la sede origen, que es quien la despacha.
+ *   · VER en qué sedes hay un producto: todos (no es una regla de traslados,
+ *     es el pull de stock_sedes sin filtrar).
+ *   · SOLICITAR unidades: el Gerente de Sede, siempre PARA una sede suya y
+ *     DESDE otra.
+ *   · DESPACHAR o RECHAZAR una solicitud: el Director General o el Auxiliar
+ *     de Inventario de la sede de ORIGEN —quien tiene la mercancía en la mano—,
+ *     con las unidades que decida (pueden ser menos de las pedidas).
+ *   · MOVER directamente, sin solicitud: el Director General entre cualesquiera
+ *     sedes; el Auxiliar de Inventario, desde su sede hacia otra.
+ *   · CANCELAR una solicitud pendiente: quien la pidió o el director.
  *
- * Funciones puras: sin base de datos.
+ * Funciones puras: sin base de datos. La app tiene la misma tabla de reglas
+ * (mobile/lib/core/negocio/traslados.dart) para mostrar sólo los botones que
+ * van a funcionar.
  */
-import { ROLES, ROLES_GESTORES } from '../config/constants.js';
+import { ROLES } from '../config/constants.js';
 import { veSede } from './alcance.js';
 
 export const ESTADOS_TRASLADO = Object.freeze(['PENDIENTE', 'APROBADO', 'RECHAZADO', 'CANCELADO']);
+export const TIPOS_TRASLADO = Object.freeze(['SOLICITUD', 'DIRECTO']);
 
-/** Quién puede pedir un traslado. El auxiliar de inventario no. */
-export const ROLES_QUE_PIDEN_TRASLADOS = Object.freeze([ROLES.ADMIN, ROLES.GERENTE, ROLES.VENDEDOR]);
+/** Roles que intervienen en algún paso de un traslado (para la barrera del push). */
+export const ROLES_DE_TRASLADOS = Object.freeze([ROLES.ADMIN, ROLES.GERENTE, ROLES.AUXILIAR_INVENTARIO]);
+/** Quién despacha o rechaza una solicitud (además, el auxiliar debe ser del origen). */
+export const ROLES_QUE_DESPACHAN = Object.freeze([ROLES.ADMIN, ROLES.AUXILIAR_INVENTARIO]);
 
-/** 'GESTOR' o 'ORIGEN' según el rol de quien lo crea. */
-export const quienConfirma = (rolCreador) => (ROLES_GESTORES.includes(rolCreador) ? 'ORIGEN' : 'GESTOR');
+const esDirector = (u) => u.rol === ROLES.ADMIN;
+const esAuxiliar = (u) => u.rol === ROLES.AUXILIAR_INVENTARIO;
+const mismaSede = (a, b) => Number(a) === Number(b);
 
 /**
- * ¿Puede `usuario` crear un traslado entre estas sedes?
- * Tiene que estar en alguna de las dos: enviar desde la suya o pedir para la suya.
+ * ¿Puede `usuario` SOLICITAR unidades de `origenId` para `destinoId`?
+ * Devuelve null si puede, o el motivo.
  */
-export function puedeCrear(usuario, origenId, destinoId) {
-  if (!ROLES_QUE_PIDEN_TRASLADOS.includes(usuario.rol)) {
-    return 'Tu rol no puede pedir traslados';
+export function puedeSolicitar(usuario, origenId, destinoId) {
+  if (usuario.rol !== ROLES.GERENTE) {
+    return esDirector(usuario) || esAuxiliar(usuario)
+      ? 'Tú mueves las unidades directamente: no necesitas solicitarlas'
+      : 'Sólo un gerente de sede solicita unidades a otra sede';
   }
-  if (Number(origenId) === Number(destinoId)) return 'La sede de origen y la de destino deben ser distintas';
-  if (!veSede(usuario.alcance, origenId) && !veSede(usuario.alcance, destinoId)) {
-    return 'Sólo puedes pedir traslados desde o hacia una sede tuya';
-  }
+  if (mismaSede(origenId, destinoId)) return 'La sede de origen y la de destino deben ser distintas';
+  if (!veSede(usuario.alcance, destinoId)) return 'Sólo puedes solicitar unidades para una sede tuya';
   return null;
 }
 
+/** ¿Puede `usuario` MOVER unidades directamente de `origenId` a `destinoId`? */
+export function puedeMover(usuario, origenId, destinoId) {
+  if (mismaSede(origenId, destinoId)) return 'La sede de origen y la de destino deben ser distintas';
+  if (esDirector(usuario)) return null;
+  if (esAuxiliar(usuario)) {
+    return veSede(usuario.alcance, origenId) ? null : 'Sólo puedes enviar unidades desde tu sede';
+  }
+  return 'Mueven unidades entre sedes el Director General o el auxiliar de inventario de la sede';
+}
+
 /**
- * ¿Puede `usuario` aprobar o rechazar este traslado?
- * Devuelve null si puede, o el motivo por el que no.
+ * ¿Puede `usuario` DESPACHAR o RECHAZAR esta solicitud?
  *
- * @param traslado { estado, confirma, sede_origen_id, solicitado_por }
+ * @param traslado { estado, sede_origen_id, solicitado_por }
  * @param usuario  { id, rol, alcance }
  */
-export function puedeResolver(traslado, usuario) {
+export function puedeDespachar(traslado, usuario) {
   if (traslado.estado !== 'PENDIENTE') return 'El traslado ya fue resuelto';
-  if (Number(traslado.solicitado_por) === Number(usuario.id)) {
-    return 'Un traslado lo confirma otra persona, no quien lo pidió';
-  }
-  if (!veSede(usuario.alcance, traslado.sede_origen_id)) {
-    return 'Lo confirma alguien de la sede de origen';
-  }
-  if (traslado.confirma === 'GESTOR' && !ROLES_GESTORES.includes(usuario.rol)) {
-    return 'Este traslado lo pidió un empleado: lo aprueba el gerente de la sede o el director';
-  }
-  if (traslado.confirma === 'ORIGEN' && !ROLES_QUE_PIDEN_TRASLADOS.includes(usuario.rol)) {
-    return 'Tu rol no puede confirmar traslados';
-  }
-  return null;
+  if (esDirector(usuario)) return null;
+  if (esAuxiliar(usuario) && veSede(usuario.alcance, traslado.sede_origen_id)) return null;
+  return 'Lo despacha el auxiliar de inventario de la sede de origen o el Director General';
 }
 
 /** Sólo quien lo pidió (o el director) lo cancela, y sólo mientras esté pendiente. */
 export function puedeCancelar(traslado, usuario) {
   if (traslado.estado !== 'PENDIENTE') return 'El traslado ya fue resuelto';
-  if (Number(traslado.solicitado_por) === Number(usuario.id) || usuario.rol === ROLES.ADMIN) return null;
+  if (Number(traslado.solicitado_por) === Number(usuario.id) || esDirector(usuario)) return null;
   return 'Sólo quien lo pidió puede cancelarlo';
+}
+
+/**
+ * Cuánto sale por línea al despachar.
+ *
+ * @param detalles  [{ uuid, cantidad }]          lo pedido, en milésimas (BigInt)
+ * @param enviadas  Map<detalle_uuid, BigInt>     lo que decide quien despacha;
+ *                                                una línea ausente sale completa
+ * @returns { lineas: [{ uuid, pedida, enviada }], total } o { error }
+ *
+ * Se puede enviar menos de lo pedido —o nada de una línea—, pero no negativo,
+ * y algo tiene que salir: despachar cero es un rechazo.
+ */
+export function repartoDeDespacho(detalles, enviadas) {
+  const lineas = [];
+  let total = 0n;
+  for (const d of detalles) {
+    const enviada = enviadas.has(d.uuid) ? enviadas.get(d.uuid) : d.cantidad;
+    if (enviada < 0n) return { error: 'Una cantidad enviada no puede ser negativa' };
+    lineas.push({ uuid: d.uuid, pedida: d.cantidad, enviada });
+    total += enviada;
+  }
+  if (total <= 0n) return { error: 'No se envía ninguna unidad: si no se puede atender, recházalo' };
+  return { lineas, total };
 }

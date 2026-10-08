@@ -29,16 +29,21 @@ final actorProvider = Provider<Actor?>((ref) {
   );
 });
 
-/// Productos en o bajo su mínimo en las sedes visibles.
-final stockBajoProvider = StreamProvider<List<StockBajo>>(
-  (ref) => ref.watch(sedesDaoProvider).observarStockBajo(),
-);
+/// Productos en o bajo su mínimo en las sedes de quien mira (el director, en
+/// todas). El stock de todas las sedes está en el teléfono para responder
+/// «¿dónde hay?», pero reponer es asunto de cada sede: a un gerente no le toca
+/// el stock bajo de las ajenas.
+final stockBajoProvider = StreamProvider<List<StockBajo>>((ref) {
+  final actor = ref.watch(actorProvider);
+  if (actor == null) return Stream.value(const []);
+  return ref.watch(sedesDaoProvider).observarStockBajo(sedes: actor.sedes?.toList());
+});
 
 final trasladosProvider = StreamProvider<List<TrasladoResumen>>(
   (ref) => ref.watch(trasladosDaoProvider).observar(),
 );
 
-/// Traslados pendientes que ESTE usuario puede aprobar o confirmar.
+/// Solicitudes pendientes que ESTE usuario puede despachar.
 final trasladosPorResolverProvider = Provider<List<TrasladoResumen>>((ref) {
   final actor = ref.watch(actorProvider);
   final lista = ref.watch(trasladosProvider).value ?? const [];
@@ -46,16 +51,17 @@ final trasladosPorResolverProvider = Provider<List<TrasladoResumen>>((ref) {
   return lista
       .where((r) =>
           r.pendiente &&
-          motivoNoPuedeResolver(
-                estado: r.traslado.estado,
-                confirma: r.traslado.confirma,
-                sedeOrigen: r.traslado.sedeOrigenUuid,
-                solicitadoPor: r.traslado.solicitadoPorUuid,
-                actor: actor,
-              ) ==
+          motivoNoPuedeDespachar(estado: r.traslado.estado, sedeOrigen: r.traslado.sedeOrigenUuid, actor: actor) ==
               null)
       .toList();
 });
+
+/// Existencias por sede de un producto (para la ficha y «¿dónde hay?»).
+final disponibilidadProvider = StreamProvider.autoDispose.family<List<StockEnSede>, String>(
+  (ref, productoUuid) => ref
+      .watch(sedesDaoProvider)
+      .observarDisponibilidad([productoUuid]).map((m) => m[productoUuid] ?? const <StockEnSede>[]),
+);
 
 final solicitudesAjusteProvider = StreamProvider<List<SolicitudConDatos>>((ref) {
   final sesion = ref.watch(sesionProvider).value;

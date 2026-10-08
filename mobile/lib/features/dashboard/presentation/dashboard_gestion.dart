@@ -186,7 +186,7 @@ class TarjetaPorResolver extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final rol = ref.watch(rolProvider);
-    final traslados = rol.pideTraslados ? ref.watch(sedes.trasladosPorResolverProvider) : const [];
+    final traslados = rol.mueveEntreSedes ? ref.watch(sedes.trasladosPorResolverProvider) : const [];
     final ajustes = ref.watch(sedes.ajustesPorAprobarProvider);
     // En línea: sin red simplemente no aparece.
     final cambios = rol.esGestor
@@ -197,7 +197,7 @@ class TarjetaPorResolver extends ConsumerWidget {
       if (traslados.isNotEmpty)
         _Fila(
           icono: Icons.local_shipping_outlined,
-          texto: '${traslados.length} traslado${traslados.length == 1 ? '' : 's'} por confirmar',
+          texto: '${traslados.length} solicitud${traslados.length == 1 ? '' : 'es'} de traslado por despachar',
           onTap: () => context.push(
             traslados.length == 1 ? Rutas.trasladoDetalle(traslados.first.traslado.uuid) : Rutas.traslados,
           ),

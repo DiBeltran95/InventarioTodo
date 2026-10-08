@@ -585,6 +585,7 @@ class SyncDao {
               sedeOrigenUuid: t['sede_origen_uuid'] as String,
               sedeDestinoUuid: t['sede_destino_uuid'] as String,
               estado: Value(t['estado'] as String? ?? 'PENDIENTE'),
+              tipo: Value(t['tipo'] as String? ?? 'SOLICITUD'),
               confirma: Value(t['confirma'] as String? ?? 'GESTOR'),
               notas: Value(t['notas'] as String?),
               solicitadoPorUuid: Value(t['solicitado_por_uuid'] as String?),
@@ -610,6 +611,7 @@ class SyncDao {
               productoUuid: Value(d['producto_uuid'] as String?),
               descripcion: d['descripcion'] as String,
               cantidad: _milesimas(d['cantidad']),
+              cantidadEnviada: Value(d['cantidad_enviada'] == null ? null : _milesimas(d['cantidad_enviada'])),
             ),
           );
     }

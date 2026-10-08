@@ -13,8 +13,9 @@ import '../../sedes/presentation/sedes_providers.dart';
 
 /// Traslados entre sedes.
 ///
-/// Arriba, lo que espera una respuesta de quien mira —«Por resolver»—; después
-/// el resto. Funciona sin conexión: pedir, aprobar y rechazar van por la cola.
+/// Arriba, lo que espera una respuesta de quien mira —las solicitudes que le
+/// toca despachar—; después el resto. Funciona sin conexión: solicitar,
+/// despachar, mover y rechazar van por la cola.
 class TrasladosPage extends ConsumerWidget {
   const TrasladosPage({super.key});
 
@@ -22,7 +23,7 @@ class TrasladosPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final traslados = ref.watch(trasladosProvider);
     final porResolver = ref.watch(trasladosPorResolverProvider);
-    final puedePedir = ref.watch(rolProvider).pideTraslados;
+    final rol = ref.watch(rolProvider);
 
     return DefaultTabController(
       length: 2,
@@ -53,10 +54,12 @@ class TrasladosPage extends ConsumerWidget {
                 _Lista(
                   items: pendientes,
                   porResolver: porResolver.map((r) => r.traslado.uuid).toSet(),
-                  vacio: const EstadoVacio(
+                  vacio: EstadoVacio(
                     icono: Icons.swap_horiz_rounded,
                     titulo: 'Nada pendiente',
-                    descripcion: 'Los traslados que pidas o que tengas que aprobar aparecen aquí.',
+                    descripcion: rol.solicitaTraslados
+                        ? 'Las unidades que solicites a otras sedes aparecen aquí hasta que las despachen.'
+                        : 'Las solicitudes que te toque despachar aparecen aquí.',
                   ),
                 ),
                 _Lista(
@@ -65,18 +68,18 @@ class TrasladosPage extends ConsumerWidget {
                   vacio: const EstadoVacio(
                     icono: Icons.history_rounded,
                     titulo: 'Sin traslados todavía',
-                    descripcion: 'Cuando se aprueben o rechacen, quedan aquí con todo su historial.',
+                    descripcion: 'Lo despachado, movido o rechazado queda aquí con todo su historial.',
                   ),
                 ),
               ],
             );
           },
         ),
-        floatingActionButton: puedePedir
+        floatingActionButton: rol.solicitaTraslados || rol.mueveEntreSedes
             ? FloatingActionButton.extended(
                 onPressed: () => context.push(Rutas.trasladoNuevo),
-                icon: const Icon(Icons.add_rounded),
-                label: const Text('Pedir traslado'),
+                icon: Icon(rol.solicitaTraslados ? Icons.add_rounded : Icons.local_shipping_outlined),
+                label: Text(rol.solicitaTraslados ? 'Solicitar unidades' : 'Mover unidades'),
               )
             : null,
       ),
@@ -119,7 +122,7 @@ class TarjetaTraslado extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = item.traslado;
-    final (color, fondo, icono, texto) = estiloEstado(context, t.estado);
+    final (color, fondo, icono, texto) = estiloEstado(context, t.estado, directo: item.directo);
 
     return Card(
       shape: meToca
@@ -171,6 +174,7 @@ class TarjetaTraslado extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
+                '${item.directo ? 'Movimiento directo' : 'Solicitud'} · '
                 '${item.productos} producto${item.productos == 1 ? '' : 's'} · '
                 '${item.unidades.format()} unidades · '
                 '${item.solicitante?.nombre ?? 'alguien'} · ${Fechas.relativo(t.solicitadoEn)}',
@@ -179,7 +183,7 @@ class TarjetaTraslado extends StatelessWidget {
               if (meToca) ...[
                 const SizedBox(height: 8),
                 Text(
-                  t.confirma == 'GESTOR' ? 'Espera tu aprobación' : 'Espera tu confirmación de despacho',
+                  'Espera tu despacho',
                   style: context.textos.labelMedium?.copyWith(color: context.dominio.advertencia),
                 ),
               ],
@@ -191,10 +195,10 @@ class TarjetaTraslado extends StatelessWidget {
   }
 }
 
-(Color, Color, IconData, String) estiloEstado(BuildContext context, String estado) {
+(Color, Color, IconData, String) estiloEstado(BuildContext context, String estado, {bool directo = false}) {
   final d = context.dominio;
   return switch (estado) {
-    'APROBADO' => (d.exito, d.exitoContenedor, Icons.check_circle_rounded, 'Aprobado'),
+    'APROBADO' => (d.exito, d.exitoContenedor, Icons.check_circle_rounded, directo ? 'Movido' : 'Despachado'),
     'RECHAZADO' => (d.peligro, d.peligroContenedor, Icons.cancel_rounded, 'Rechazado'),
     'CANCELADO' => (
         context.colores.onSurfaceVariant,
@@ -202,7 +206,7 @@ class TarjetaTraslado extends StatelessWidget {
         Icons.block_rounded,
         'Cancelado',
       ),
-    _ => (d.advertencia, d.advertenciaContenedor, Icons.schedule_rounded, 'Pendiente'),
+    _ => (d.advertencia, d.advertenciaContenedor, Icons.schedule_rounded, 'Por despachar'),
   };
 }
 

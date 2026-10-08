@@ -104,7 +104,19 @@ void main() {
       expect(aux.ajustaDirecto, isFalse);
       expect(aux.puedeVender, isFalse);
       expect(aux.veCostos, isFalse);
-      expect(aux.pideTraslados, isFalse);
+      expect(aux.solicitaTraslados, isFalse, reason: 'no solicita: mueve');
+      expect(aux.mueveEntreSedes, isTrue);
+    });
+
+    test('traslados: el gerente solicita; el director y el auxiliar mueven; el vendedor sólo mira', () {
+      expect(RolUsuario.gerente.solicitaTraslados, isTrue);
+      expect(RolUsuario.gerente.mueveEntreSedes, isFalse);
+      expect(RolUsuario.director.mueveEntreSedes, isTrue);
+      expect(RolUsuario.director.solicitaTraslados, isFalse);
+      expect(RolUsuario.vendedor.veTraslados, isFalse);
+      for (final rol in [RolUsuario.gerente, RolUsuario.director, RolUsuario.auxiliarInventario]) {
+        expect(rol.veTraslados, isTrue, reason: rol.etiqueta);
+      }
     });
 
     test('vendedor y auxiliar son de una sede; gerente y director no', () {

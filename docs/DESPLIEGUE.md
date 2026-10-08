@@ -301,6 +301,15 @@ npm run db:migrate         # aplica schema.sql y las migraciones; se puede repet
 npm run db:check
 ```
 
+`db:migrate` lee `database/schema.sql` y `database/migrations/*.sql` desde la carpeta **hermana**
+de `backend/`. Si subes el backend a mano (sin clonar), sube también `database/` al mismo nivel: con
+el backend en `~/www`, la carpeta tiene que quedar en `~/database`. Si falta, el error es
+`ENOENT ... /database/schema.sql`.
+
+Migraciones de esta versión: `002_multisede.sql` (sedes, roles, traslados, cierres, cuentas por
+cobrar) y `003_disponibilidad_traslados.sql` (despacho parcial y movimientos directos entre
+sedes).
+
 Mientras no se reinicie el sitio, el backend viejo sigue atendiendo con la base ya migrada: los
 triggers asignan a la sede principal lo que llegue sin sede, así que no se pierde nada en ese rato.
 

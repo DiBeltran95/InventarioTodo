@@ -173,7 +173,7 @@ async function main() {
   r = await luisCli.entrar(vendedor2.email, 'Prueba1234');
   afirmar(r.status === 200 && r.data.jornada.motivo === 'ACCESO_EXTRA', 'con el acceso extra, Luis entra');
 
-  seccion('4. Stock por sede y traslado');
+  seccion('4. Disponibilidad en todas las sedes y traslados');
   r = await director.pedir('GET', '/productos?limite=50');
   const producto = r.data.find((p) => Number(p.stock_actual) >= 10);
   afirmar(!!producto, `hay un producto con stock en la principal (${producto?.nombre})`);
@@ -187,35 +187,76 @@ async function main() {
     )?.stock_actual ?? stockTotalAntes,
   );
 
-  const traslado = { uuid: randomUUID(), detalle: randomUUID() };
+  // El stock de TODAS las sedes baja a todos; se recorren las páginas porque
+  // la fila buscada puede no estar en la primera.
+  const stockDe = async (cli, sedeUuid) => {
+    let ultimo = null;
+    let cursores = {};
+    for (let i = 0; i < 50; i++) {
+      const p = await cli.pedir('POST', '/sync/pull', { cursores, entidades: ['stock_sedes'] });
+      const bloque = p.data.entidades.stock_sedes;
+      const fila = bloque.items.findLast((s) => s.producto_uuid === producto.uuid && s.sede_uuid === sedeUuid);
+      if (fila) ultimo = Number(fila.stock_actual);
+      if (!bloque.hay_mas) break;
+      cursores = { stock_sedes: bloque.cursor };
+    }
+    return ultimo ?? 0;
+  };
+
+  afirmar(
+    (await stockDe(caja, principal.uuid)) === principalAntes,
+    'Ana (vendedora de Norte) ve cuánto hay en la principal',
+  );
+
   let res = await caja.push([
+    {
+      tipo: 'TRASLADO_CREAR',
+      payload: {
+        uuid: randomUUID(),
+        sede_origen_uuid: principal.uuid,
+        sede_destino_uuid: norte.uuid,
+        detalles: [{ uuid: randomUUID(), producto_uuid: producto.uuid, cantidad: '1.000' }],
+      },
+    },
+  ]);
+  afirmar(res[0]?.error?.codigo === 'SIN_PERMISO', 'Ana sólo consulta: no solicita traslados');
+
+  const traslado = { uuid: randomUUID(), detalle: randomUUID() };
+  res = await gerenteCli.push([
     {
       tipo: 'TRASLADO_CREAR',
       payload: {
         uuid: traslado.uuid,
         sede_origen_uuid: principal.uuid,
         sede_destino_uuid: norte.uuid,
-        detalles: [{ uuid: traslado.detalle, producto_uuid: producto.uuid, cantidad: '5.000' }],
+        detalles: [{ uuid: traslado.detalle, producto_uuid: producto.uuid, cantidad: '6.000' }],
         notas: 'Para la vitrina',
       },
     },
   ]);
-  afirmar(res[0]?.estado === 'OK', 'Ana pide 5 unidades de la principal para Norte', JSON.stringify(res[0]?.error));
+  afirmar(res[0]?.estado === 'OK', 'el gerente de Norte solicita 6 a la principal', JSON.stringify(res[0]?.error));
+  afirmar((await stockDe(gerenteCli, norte.uuid)) === 0, 'solicitar no mueve stock');
   res = await gerenteCli.push([{ tipo: 'TRASLADO_APROBAR', payload: { uuid: traslado.uuid } }]);
   afirmar(
     res[0]?.estado === 'ERROR' && res[0]?.error?.codigo === 'SIN_PERMISO',
-    'el gerente de Norte no aprueba: la mercancía sale de la principal',
+    'el gerente no despacha su propia solicitud',
   );
-  res = await director.push([{ tipo: 'TRASLADO_APROBAR', payload: { uuid: traslado.uuid } }]);
-  afirmar(res[0]?.estado === 'OK', 'el director lo aprueba', JSON.stringify(res[0]?.error));
-
-  const stockDe = async (cli, sedeUuid) => {
-    const p = await cli.pull();
-    const fila = p.data.entidades.stock_sedes.items.find(
-      (s) => s.producto_uuid === producto.uuid && s.sede_uuid === sedeUuid,
-    );
-    return fila ? Number(fila.stock_actual) : 0;
-  };
+  const salida = randomUUID();
+  const entrada = randomUUID();
+  res = await director.push([
+    {
+      tipo: 'TRASLADO_APROBAR',
+      payload: {
+        uuid: traslado.uuid,
+        movimientos: [{ detalle_uuid: traslado.detalle, salida_uuid: salida, entrada_uuid: entrada, cantidad: '5.000' }],
+      },
+    },
+  ]);
+  afirmar(
+    res[0]?.estado === 'OK' && res[0]?.resultado?.parcial === true,
+    'el director despacha 5 de las 6 pedidas',
+    JSON.stringify(res[0]?.error ?? res[0]?.resultado),
+  );
   afirmar((await stockDe(gerenteCli, norte.uuid)) === 5, 'Norte tiene 5');
   afirmar(
     (await stockDe(director, principal.uuid)) === principalAntes - 5,
@@ -309,6 +350,43 @@ async function main() {
   res = await gerenteCli.push([{ tipo: 'AJUSTE_APROBAR', payload: { uuid: solicitud } }]);
   afirmar(res[0]?.estado === 'OK', 'el gerente la aprueba', JSON.stringify(res[0]?.error));
   afirmar((await stockDe(gerenteCli, norte.uuid)) === 11, 'Norte baja a 11');
+
+  res = await bodega.push([
+    {
+      tipo: 'TRASLADO_CREAR',
+      payload: {
+        uuid: randomUUID(),
+        directo: true,
+        sede_origen_uuid: norte.uuid,
+        sede_destino_uuid: principal.uuid,
+        detalles: [{ uuid: randomUUID(), producto_uuid: producto.uuid, cantidad: '1.000' }],
+      },
+    },
+    {
+      tipo: 'TRASLADO_CREAR',
+      payload: {
+        uuid: randomUUID(),
+        directo: true,
+        sede_origen_uuid: principal.uuid,
+        sede_destino_uuid: norte.uuid,
+        detalles: [{ uuid: randomUUID(), producto_uuid: producto.uuid, cantidad: '1.000' }],
+      },
+    },
+    {
+      tipo: 'TRASLADO_CREAR',
+      payload: {
+        uuid: randomUUID(),
+        directo: true,
+        sede_origen_uuid: norte.uuid,
+        sede_destino_uuid: principal.uuid,
+        detalles: [{ uuid: randomUUID(), producto_uuid: producto.uuid, cantidad: '999.000' }],
+      },
+    },
+  ]);
+  afirmar(res[0]?.estado === 'OK', 'el auxiliar de Norte envía 1 a la principal', JSON.stringify(res[0]?.error));
+  afirmar(res[1]?.error?.codigo === 'SIN_PERMISO', 'pero no saca unidades de otra sede');
+  afirmar(res[2]?.error?.codigo === 'TRASLADO_SIN_STOCK', 'ni envía más de lo que hay');
+  afirmar((await stockDe(gerenteCli, norte.uuid)) === 10, 'Norte queda en 10');
 
   seccion('7. Atribución: la cola de Ana sube con la sesión de Luis');
   // El turno de Ana terminó con una venta sin subir. Luis entra en el MISMO

@@ -223,6 +223,37 @@ class SedesDao {
         );
   }
 
+  /// Existencias de varios productos en cada sede activa (producto → filas),
+  /// la principal primero. Es lo que responde «¿dónde hay?»: el stock de todas
+  /// las sedes baja a todos los teléfonos, así que funciona sin red.
+  ///
+  /// Una sede sin fila para un producto es una sede que nunca lo tuvo: cuenta
+  /// como cero, igual que en el servidor.
+  Stream<Map<String, List<StockEnSede>>> observarDisponibilidad(List<String> productoUuids) {
+    if (productoUuids.isEmpty) return Stream.value(const {});
+    final consulta = db.select(db.stockSedes).join([
+      innerJoin(db.sedes, db.sedes.uuid.equalsExp(db.stockSedes.sedeUuid)),
+    ])
+      ..where(db.stockSedes.productoUuid.isIn(productoUuids) &
+          db.sedes.deletedAt.isNull() &
+          db.sedes.activo.equals(true))
+      ..orderBy([OrderingTerm.desc(db.sedes.esPrincipal), OrderingTerm.asc(db.sedes.nombre)]);
+    return consulta.watch().map((filas) {
+      final mapa = <String, List<StockEnSede>>{};
+      for (final f in filas) {
+        final ss = f.readTable(db.stockSedes);
+        mapa.putIfAbsent(ss.productoUuid, () => []).add(
+              StockEnSede(
+                sede: f.readTable(db.sedes),
+                stock: Cantidad(ss.stockActual),
+                minimo: ss.stockMinimo == null ? null : Cantidad(ss.stockMinimo!),
+              ),
+            );
+      }
+      return mapa;
+    });
+  }
+
   /// Productos en o bajo su mínimo, por sede.
   ///
   /// Se calcula sobre `stock_sedes` local (no sobre las alertas del servidor)

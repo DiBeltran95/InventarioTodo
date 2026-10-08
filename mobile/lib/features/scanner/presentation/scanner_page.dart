@@ -15,6 +15,7 @@ import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/foto_producto.dart';
 import '../../auth/presentation/auth_providers.dart';
+import '../../disponibilidad/presentation/disponibilidad_page.dart';
 import '../../ventas/presentation/carrito_provider.dart';
 import '../domain/modo_escaner.dart';
 import 'marco_escaner.dart';
@@ -546,6 +547,8 @@ class _TarjetaResultado extends StatelessWidget {
             color: context.dominio.advertencia,
             fondo: context.dominio.advertenciaContenedor,
           ),
+          // Aquí no queda: ¿dónde sí? Para decírselo al cliente sin buscar.
+          HayEnOtrasSedes(productoUuid: producto.uuid),
         ],
         if (onDeshacer != null) ...[
           const SizedBox(height: 12),

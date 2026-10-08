@@ -8,7 +8,7 @@ import '../app_database.dart';
 import 'inventario_dao.dart';
 import 'outbox_dao.dart';
 
-/// Producto y cantidad que se pide trasladar.
+/// Producto y cantidad de una línea de traslado.
 class LineaTraslado {
   const LineaTraslado({required this.productoUuid, required this.descripcion, required this.cantidad});
 
@@ -31,10 +31,13 @@ class TrasladoResumen {
   final Sede? origen;
   final Sede? destino;
   final int productos;
+
+  /// Unidades pedidas (o movidas, si es directo).
   final Cantidad unidades;
   final Usuario? solicitante;
 
   bool get pendiente => traslado.estado == 'PENDIENTE';
+  bool get directo => traslado.tipo == 'DIRECTO';
 }
 
 class TrasladoCompleto {
@@ -43,15 +46,19 @@ class TrasladoCompleto {
   final TrasladoResumen resumen;
   final List<TrasladoDetalle> detalles;
   final List<({TrasladoEvento evento, Usuario? usuario})> eventos;
+
+  /// Se despachó menos de lo pedido en alguna línea.
+  bool get parcial => detalles.any((d) => d.cantidadEnviada != null && d.cantidadEnviada != d.cantidad);
 }
 
 /// Traslados entre sedes, sin red.
 ///
-/// Flujo simple: se pide (PENDIENTE) y, al aprobarse, el stock sale de la sede
-/// origen y entra en la destino en ese mismo momento. Cada paso deja un evento
-/// con usuario y hora, y viaja por la cola de salida; si dos personas resuelven
-/// el mismo traslado sin red, el servidor rechaza la segunda y aparece en
-/// «Elementos con problema».
+/// Flujo simple: el gerente solicita (PENDIENTE) y, al despacharse, el stock
+/// sale de la sede origen y entra en la destino en ese mismo momento. El
+/// director o el auxiliar también pueden mover unidades directamente: el
+/// traslado nace ya despachado. Cada paso deja un evento con usuario y hora y
+/// viaja por la cola de salida; si dos personas resuelven el mismo traslado sin
+/// red, el servidor rechaza la segunda y aparece en «Elementos con problema».
 class TrasladosDao {
   TrasladosDao(this.db, this.outbox, this.inventario);
 
@@ -103,20 +110,52 @@ class TrasladosDao {
             ),
           );
 
-  Future<String> crear({
+  /// El gerente solicita unidades de [sedeOrigenUuid] para una sede suya. No
+  /// mueve nada: lo despacha el auxiliar del origen o el director.
+  Future<String> solicitar({
     required String sedeOrigenUuid,
     required String sedeDestinoUuid,
     required List<LineaTraslado> lineas,
     String? notas,
   }) async {
-    if (lineas.isEmpty) throw ArgumentError('El traslado no tiene productos');
     final q = await _quien();
-    final motivo = motivoNoPuedeCrear(
+    final motivo = motivoNoPuedeSolicitar(
       Actor(uuid: q.usuarioUuid ?? '', rol: q.rol, sedes: q.sedes),
       sedeOrigenUuid,
       sedeDestinoUuid,
     );
     if (motivo != null) throw StateError(motivo);
+    return _crear(q, sedeOrigenUuid, sedeDestinoUuid, lineas, notas, directo: false);
+  }
+
+  /// El director (entre cualesquiera sedes) o el auxiliar (desde la suya)
+  /// mueven unidades sin solicitud previa: el traslado nace despachado.
+  Future<String> mover({
+    required String sedeOrigenUuid,
+    required String sedeDestinoUuid,
+    required List<LineaTraslado> lineas,
+    String? notas,
+  }) async {
+    final q = await _quien();
+    final motivo = motivoNoPuedeMover(
+      Actor(uuid: q.usuarioUuid ?? '', rol: q.rol, sedes: q.sedes),
+      sedeOrigenUuid,
+      sedeDestinoUuid,
+    );
+    if (motivo != null) throw StateError(motivo);
+    return _crear(q, sedeOrigenUuid, sedeDestinoUuid, lineas, notas, directo: true);
+  }
+
+  Future<String> _crear(
+    ({String? usuarioUuid, RolUsuario rol, Set<String>? sedes, String? prefijo}) q,
+    String sedeOrigenUuid,
+    String sedeDestinoUuid,
+    List<LineaTraslado> lineas,
+    String? notas, {
+    required bool directo,
+  }) async {
+    if (lineas.isEmpty) throw ArgumentError('El traslado no tiene productos');
+    if (lineas.any((l) => l.cantidad.milesimas <= 0)) throw ArgumentError('Cada cantidad debe ser mayor que cero');
 
     final uuid = _uuid.v7();
     final ahora = DateTime.now().toUtc();
@@ -129,7 +168,8 @@ class TrasladosDao {
               numero: numero,
               sedeOrigenUuid: sedeOrigenUuid,
               sedeDestinoUuid: sedeDestinoUuid,
-              confirma: Value(quienConfirma(q.rol)),
+              tipo: Value(directo ? 'DIRECTO' : 'SOLICITUD'),
+              confirma: const Value('ORIGEN'),
               notas: Value(notas),
               solicitadoPorUuid: Value(q.usuarioUuid),
               solicitadoEn: ahora,
@@ -138,24 +178,34 @@ class TrasladosDao {
           );
 
       final detalles = <Map<String, dynamic>>[];
+      final filas = <TrasladoDetalle>[];
       for (final l in lineas) {
         final detalleUuid = _uuid.v7();
-        await db.into(db.trasladoDetalles).insert(
-              TrasladoDetallesCompanion.insert(
-                uuid: detalleUuid,
-                trasladoUuid: uuid,
-                productoUuid: Value(l.productoUuid),
-                descripcion: l.descripcion,
-                cantidad: l.cantidad.milesimas,
-              ),
-            );
-        detalles.add({
-          'uuid': detalleUuid,
-          'producto_uuid': l.productoUuid,
-          'cantidad': l.cantidad.toApi(),
-        });
+        final fila = TrasladoDetalle(
+          uuid: detalleUuid,
+          trasladoUuid: uuid,
+          productoUuid: l.productoUuid,
+          descripcion: l.descripcion,
+          cantidad: l.cantidad.milesimas,
+        );
+        await db.into(db.trasladoDetalles).insert(fila);
+        filas.add(fila);
+        detalles.add({'uuid': detalleUuid, 'producto_uuid': l.productoUuid, 'cantidad': l.cantidad.toApi()});
       }
       await _evento(uuid, 'CREADO', q.usuarioUuid, nota: notas);
+
+      // Directo: se despacha completo aquí mismo, con las mismas
+      // comprobaciones de stock que un despacho normal.
+      final movimientos = directo
+          ? await _despacharLocal(
+              q,
+              (await (db.select(db.traslados)..where((x) => x.uuid.equals(uuid))).getSingle()),
+              filas,
+              const {},
+              ahora,
+              nota: 'Movimiento directo',
+            )
+          : null;
 
       await outbox.encolar(
         'TRASLADO_CREAR',
@@ -169,93 +219,33 @@ class TrasladosDao {
           'notas': notas,
           'detalles': detalles,
           'fecha': ahora.toIso8601String(),
+          if (directo) ...{'directo': true, 'movimientos': movimientos, 'creado_offline': true},
         },
       );
     });
     return uuid;
   }
 
-  /// Aprueba y mueve el stock en el acto.
+  /// Despacha una solicitud y mueve el stock en el acto.
   ///
-  /// Los uuid de los movimientos se generan aquí y viajan al servidor: así la
-  /// copia local y la del servidor son la MISMA fila y el kardex no muestra el
-  /// traslado dos veces. Localmente sólo se aplica el movimiento de las sedes
-  /// que este teléfono ve; el de la otra lo crea el servidor y le llega a quien
-  /// sí la ve.
-  Future<void> aprobar(String trasladoUuid) async {
+  /// [enviadas] (uuid de línea → cantidad) es lo que de verdad sale; una línea
+  /// ausente sale completa. Se puede enviar menos de lo pedido, o nada de una
+  /// línea, pero no más de lo que hay en el origen.
+  Future<void> despachar(String trasladoUuid, {Map<String, Cantidad> enviadas = const {}}) async {
     final q = await _quien();
     await db.transaction(() async {
       final t = await (db.select(db.traslados)..where((x) => x.uuid.equals(trasladoUuid))).getSingle();
-      final motivo = motivoNoPuedeResolver(
+      final motivo = motivoNoPuedeDespachar(
         estado: t.estado,
-        confirma: t.confirma,
         sedeOrigen: t.sedeOrigenUuid,
-        solicitadoPor: t.solicitadoPorUuid,
         actor: Actor(uuid: q.usuarioUuid ?? '', rol: q.rol, sedes: q.sedes),
       );
       if (motivo != null) throw StateError(motivo);
 
-      final origen = await (db.select(db.sedes)..where((s) => s.uuid.equals(t.sedeOrigenUuid))).getSingleOrNull();
-      final destino = await (db.select(db.sedes)..where((s) => s.uuid.equals(t.sedeDestinoUuid))).getSingleOrNull();
       final detalles =
           await (db.select(db.trasladoDetalles)..where((d) => d.trasladoUuid.equals(trasladoUuid))).get();
-
-      bool ve(String s) => q.sedes == null || q.sedes!.contains(s);
-
-      // La misma regla que el servidor (TRASLADO_SIN_STOCK): no se despacha lo
-      // que no hay. Comprobarlo aquí evita aplicar en el teléfono un traslado
-      // que el servidor va a rechazar y dejar el stock local descuadrado.
-      if (ve(t.sedeOrigenUuid)) {
-        for (final d in detalles.where((d) => d.productoUuid != null)) {
-          final disponible = await inventario.stockEnSede(d.productoUuid!, t.sedeOrigenUuid);
-          if (disponible < d.cantidad) {
-            throw StateError(
-              'No hay suficiente ${d.descripcion} en ${origen?.nombre ?? 'la sede de origen'}: '
-              'hay ${Cantidad(disponible).format()} y el traslado pide ${Cantidad(d.cantidad).format()}',
-            );
-          }
-        }
-      }
-
-      final movimientos = <Map<String, dynamic>>[];
-      for (final d in detalles) {
-        final salida = _uuid.v7();
-        final entrada = _uuid.v7();
-        movimientos.add({'detalle_uuid': d.uuid, 'salida_uuid': salida, 'entrada_uuid': entrada});
-        if (d.productoUuid == null) continue;
-
-        if (ve(t.sedeOrigenUuid)) {
-          await inventario.aplicarMovimientoDeTraslado(
-            productoUuid: d.productoUuid!,
-            sedeUuid: t.sedeOrigenUuid,
-            cantidadConSigno: Cantidad(-d.cantidad),
-            trasladoUuid: t.uuid,
-            uuid: salida,
-            motivo: 'Traslado ${t.numero} a ${destino?.nombre ?? 'otra sede'}',
-          );
-        }
-        if (ve(t.sedeDestinoUuid)) {
-          await inventario.aplicarMovimientoDeTraslado(
-            productoUuid: d.productoUuid!,
-            sedeUuid: t.sedeDestinoUuid,
-            cantidadConSigno: Cantidad(d.cantidad),
-            trasladoUuid: t.uuid,
-            uuid: entrada,
-            motivo: 'Traslado ${t.numero} desde ${origen?.nombre ?? 'otra sede'}',
-          );
-        }
-      }
-
       final ahora = DateTime.now().toUtc();
-      await (db.update(db.traslados)..where((x) => x.uuid.equals(trasladoUuid))).write(
-        TrasladosCompanion(
-          estado: const Value('APROBADO'),
-          resueltoPorUuid: Value(q.usuarioUuid),
-          resueltoEn: Value(ahora),
-          updatedAt: Value(ahora),
-        ),
-      );
-      await _evento(trasladoUuid, 'APROBADO', q.usuarioUuid);
+      final movimientos = await _despacharLocal(q, t, detalles, enviadas, ahora);
 
       await outbox.encolar(
         'TRASLADO_APROBAR',
@@ -269,6 +259,102 @@ class TrasladosDao {
         },
       );
     });
+  }
+
+  /// Aplica en el teléfono el despacho de [t] y devuelve, por línea, los uuid
+  /// de los movimientos y la cantidad enviada para el servidor. Debe llamarse
+  /// dentro de una transacción.
+  ///
+  /// Los uuid se generan aquí y viajan al servidor: así la copia local y la del
+  /// servidor son la MISMA fila y el kardex no muestra el traslado dos veces.
+  /// Localmente sólo se aplica el movimiento de las sedes de quien despacha;
+  /// el de la otra lo crea el servidor y llega con la siguiente bajada.
+  Future<List<Map<String, dynamic>>> _despacharLocal(
+    ({String? usuarioUuid, RolUsuario rol, Set<String>? sedes, String? prefijo}) q,
+    Traslado t,
+    List<TrasladoDetalle> detalles,
+    Map<String, Cantidad> enviadas,
+    DateTime ahora, {
+    String? nota,
+  }) async {
+    final pedidas = {for (final d in detalles) d.uuid: Cantidad(d.cantidad)};
+    final reparto = motivoRepartoInvalido(pedidas, enviadas);
+    if (reparto != null) throw StateError(reparto);
+    Cantidad enviadaDe(TrasladoDetalle d) => enviadas[d.uuid] ?? Cantidad(d.cantidad);
+
+    final origen = await (db.select(db.sedes)..where((s) => s.uuid.equals(t.sedeOrigenUuid))).getSingleOrNull();
+    final destino = await (db.select(db.sedes)..where((s) => s.uuid.equals(t.sedeDestinoUuid))).getSingleOrNull();
+
+    // La misma regla que el servidor (TRASLADO_SIN_STOCK): no se envía lo que
+    // no hay. El stock de todas las sedes está en el teléfono, así que se
+    // comprueba siempre. Si la copia local estuviera atrasada, el servidor
+    // tiene la última palabra.
+    final porProducto = <String, int>{};
+    for (final d in detalles.where((d) => d.productoUuid != null)) {
+      porProducto[d.productoUuid!] = (porProducto[d.productoUuid!] ?? 0) + enviadaDe(d).milesimas;
+    }
+    for (final e in porProducto.entries.where((e) => e.value > 0)) {
+      final disponible = await inventario.stockEnSede(e.key, t.sedeOrigenUuid);
+      if (disponible < e.value) {
+        final nombre = detalles.firstWhere((d) => d.productoUuid == e.key).descripcion;
+        throw StateError(
+          'No hay suficiente $nombre en ${origen?.nombre ?? 'la sede de origen'}: '
+          'hay ${Cantidad(disponible).format()} y se envían ${Cantidad(e.value).format()}',
+        );
+      }
+    }
+
+    bool ve(String s) => q.sedes == null || q.sedes!.contains(s);
+    final movimientos = <Map<String, dynamic>>[];
+    var parcial = false;
+    for (final d in detalles) {
+      final enviada = enviadaDe(d);
+      if (enviada.milesimas != d.cantidad) parcial = true;
+      await (db.update(db.trasladoDetalles)..where((x) => x.uuid.equals(d.uuid)))
+          .write(TrasladoDetallesCompanion(cantidadEnviada: Value(enviada.milesimas)));
+
+      final salida = _uuid.v7();
+      final entrada = _uuid.v7();
+      movimientos.add({
+        'detalle_uuid': d.uuid,
+        'salida_uuid': salida,
+        'entrada_uuid': entrada,
+        'cantidad': enviada.toApi(),
+      });
+      if (d.productoUuid == null || enviada.esCero) continue;
+
+      if (ve(t.sedeOrigenUuid)) {
+        await inventario.aplicarMovimientoDeTraslado(
+          productoUuid: d.productoUuid!,
+          sedeUuid: t.sedeOrigenUuid,
+          cantidadConSigno: Cantidad(-enviada.milesimas),
+          trasladoUuid: t.uuid,
+          uuid: salida,
+          motivo: 'Traslado ${t.numero} a ${destino?.nombre ?? 'otra sede'}',
+        );
+      }
+      if (ve(t.sedeDestinoUuid)) {
+        await inventario.aplicarMovimientoDeTraslado(
+          productoUuid: d.productoUuid!,
+          sedeUuid: t.sedeDestinoUuid,
+          cantidadConSigno: enviada,
+          trasladoUuid: t.uuid,
+          uuid: entrada,
+          motivo: 'Traslado ${t.numero} desde ${origen?.nombre ?? 'otra sede'}',
+        );
+      }
+    }
+
+    await (db.update(db.traslados)..where((x) => x.uuid.equals(t.uuid))).write(
+      TrasladosCompanion(
+        estado: const Value('APROBADO'),
+        resueltoPorUuid: Value(q.usuarioUuid),
+        resueltoEn: Value(ahora),
+        updatedAt: Value(ahora),
+      ),
+    );
+    await _evento(t.uuid, 'APROBADO', q.usuarioUuid, nota: nota ?? (parcial ? 'Despacho parcial' : null));
+    return movimientos;
   }
 
   Future<void> rechazar(String trasladoUuid, {String? motivo}) => _resolverSinStock(
@@ -299,13 +385,7 @@ class TrasladosDao {
       final t = await (db.select(db.traslados)..where((x) => x.uuid.equals(trasladoUuid))).getSingle();
       final impedimento = cancelar
           ? motivoNoPuedeCancelar(estado: t.estado, solicitadoPor: t.solicitadoPorUuid, actor: actor)
-          : motivoNoPuedeResolver(
-              estado: t.estado,
-              confirma: t.confirma,
-              sedeOrigen: t.sedeOrigenUuid,
-              solicitadoPor: t.solicitadoPorUuid,
-              actor: actor,
-            );
+          : motivoNoPuedeDespachar(estado: t.estado, sedeOrigen: t.sedeOrigenUuid, actor: actor);
       if (impedimento != null) throw StateError(impedimento);
 
       final ahora = DateTime.now().toUtc();
@@ -330,7 +410,7 @@ class TrasladosDao {
 
   // ── Lecturas ──────────────────────────────────────────────────────────────
 
-  Stream<List<TrasladoResumen>> observar({bool soloPendientes = false, int limite = 200}) {
+  Stream<List<TrasladoResumen>> observar({bool soloPendientes = false, String? uuid, int limite = 200}) {
     final origen = db.alias(db.sedes, 'origen');
     final destino = db.alias(db.sedes, 'destino');
     final consulta = db.select(db.traslados).join([
@@ -340,6 +420,7 @@ class TrasladosDao {
     ])
       ..where(db.traslados.deletedAt.isNull());
     if (soloPendientes) consulta.where(db.traslados.estado.equals('PENDIENTE'));
+    if (uuid != null) consulta.where(db.traslados.uuid.equals(uuid));
     consulta
       ..orderBy([OrderingTerm.desc(db.traslados.solicitadoEn)])
       ..limit(limite);
@@ -364,7 +445,7 @@ class TrasladosDao {
   }
 
   Stream<TrasladoCompleto?> observarDetalle(String uuid) {
-    return observar().map((lista) => lista.where((r) => r.traslado.uuid == uuid).firstOrNull).asyncMap(
+    return observar(uuid: uuid).map((lista) => lista.firstOrNull).asyncMap(
       (resumen) async {
         if (resumen == null) return null;
         final detalles =

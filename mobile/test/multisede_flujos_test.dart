@@ -29,6 +29,9 @@ void main() {
   const gerente = 'u-gerente';
   const vendedor = 'u-vendedor';
   const auxiliar = 'u-auxiliar';
+  const gerenteA = 'u-gerente-a';
+  const auxiliarB = 'u-auxiliar-b';
+  const director = 'u-director';
 
   Future<void> comoUsuario(String uuid) => (db.update(db.estadoApp)..where((t) => t.id.equals(1)))
       .write(EstadoAppCompanion(usuarioUuid: Value(uuid)));
@@ -63,6 +66,15 @@ void main() {
             email: 'a@x.co',
             rol: const Value('AUXILIAR_INVENTARIO'),
             sedes: const Value(a)),
+        UsuariosCompanion.insert(
+            uuid: gerenteA, nombre: 'Gabo Gerente', email: 'ga@x.co', rol: const Value('GERENTE'), sedes: const Value(a)),
+        UsuariosCompanion.insert(
+            uuid: auxiliarB,
+            nombre: 'Beto Auxiliar',
+            email: 'ab@x.co',
+            rol: const Value('AUXILIAR_INVENTARIO'),
+            sedes: const Value(b)),
+        UsuariosCompanion.insert(uuid: director, nombre: 'Dora Directora', email: 'd@x.co', rol: const Value('ADMIN')),
       ]);
       // 10 unidades en A (la activa, también en productos.stockActual) y 5 en B.
       x.insert(
@@ -92,63 +104,147 @@ void main() {
     late TrasladosDao traslados;
     setUp(() => traslados = TrasladosDao(db, outbox, inventario));
 
-    test('lo pide un vendedor, lo aprueba el gerente y el stock se mueve en las dos sedes', () async {
-      await comoUsuario(vendedor);
-      final uuid = await traslados.crear(
-        sedeOrigenUuid: b,
-        sedeDestinoUuid: a,
-        lineas: [LineaTraslado(productoUuid: 'p1', descripcion: 'Arroz', cantidad: Cantidad.unidades(3))],
-      );
-      expect(await stock(a), 10000, reason: 'pedirlo no mueve nada');
+    LineaTraslado arroz(int unidades) =>
+        LineaTraslado(productoUuid: 'p1', descripcion: 'Arroz', cantidad: Cantidad.unidades(unidades));
 
-      // Quien lo pidió no puede aprobarlo.
-      await expectLater(traslados.aprobar(uuid), throwsStateError);
+    Future<TrasladoDetalle> linea(String trasladoUuid) =>
+        (db.select(db.trasladoDetalles)..where((d) => d.trasladoUuid.equals(trasladoUuid))).getSingle();
 
-      await comoUsuario(gerente);
-      await traslados.aprobar(uuid);
+    test('el gerente solicita y el auxiliar del origen despacha menos de lo pedido', () async {
+      await comoUsuario(gerenteA);
+      final uuid = await traslados.solicitar(sedeOrigenUuid: b, sedeDestinoUuid: a, lineas: [arroz(4)]);
+      expect(await stock(b), 5000, reason: 'solicitar no mueve nada');
+
+      // Ni el propio gerente ni el auxiliar de OTRA sede lo despachan.
+      await expectLater(traslados.despachar(uuid), throwsStateError);
+      await comoUsuario(auxiliar);
+      await expectLater(traslados.despachar(uuid), throwsStateError);
+
+      await comoUsuario(auxiliarB);
+      final l = await linea(uuid);
+      await traslados.despachar(uuid, enviadas: {l.uuid: Cantidad.unidades(3)});
+
+      expect(await stock(b), 2000, reason: 'salen 3, no 4');
+      expect((await linea(uuid)).cantidadEnviada, 3000);
+
+      final ops = await cola();
+      expect(ops.map((o) => o.tipo), ['TRASLADO_CREAR', 'TRASLADO_APROBAR']);
+      expect(ops.first.payload['usuario_uuid'], gerenteA);
+      expect(ops.first.payload.containsKey('directo'), isFalse);
+      expect(ops.last.payload['usuario_uuid'], auxiliarB);
+      expect((ops.last.payload['movimientos'] as List).single, containsPair('cantidad', '3.000'));
+
+      final eventos = await (db.select(db.trasladoEventos)..where((x) => x.trasladoUuid.equals(uuid))).get();
+      expect(eventos.map((e) => (e.evento, e.usuarioUuid, e.nota)), [
+        ('CREADO', gerenteA, null),
+        ('APROBADO', auxiliarB, 'Despacho parcial'),
+      ]);
+    });
+
+    test('el director despacha y el stock se mueve en las dos sedes', () async {
+      await comoUsuario(gerenteA);
+      final uuid = await traslados.solicitar(sedeOrigenUuid: b, sedeDestinoUuid: a, lineas: [arroz(3)]);
+      await comoUsuario(director);
+      await traslados.despachar(uuid);
 
       expect(await stock(b), 2000);
       expect(await stock(a), 13000);
       expect(await stockProyectado(), 13000, reason: 'A es la sede activa: el catálogo lo refleja');
-
-      final ops = await cola();
-      expect(ops.map((o) => o.tipo), ['TRASLADO_CREAR', 'TRASLADO_APROBAR']);
-      expect(ops.first.payload['usuario_uuid'], vendedor);
-      expect(ops.last.payload['usuario_uuid'], gerente);
-      expect((ops.last.payload['movimientos'] as List).single, containsPair('detalle_uuid', isA<String>()));
-
       final t = await (db.select(db.traslados)..where((x) => x.uuid.equals(uuid))).getSingle();
-      expect(t.estado, 'APROBADO');
-      expect(t.confirma, 'GESTOR');
-      final eventos = await (db.select(db.trasladoEventos)..where((x) => x.trasladoUuid.equals(uuid))).get();
-      expect(eventos.map((e) => (e.evento, e.usuarioUuid)), [('CREADO', vendedor), ('APROBADO', gerente)]);
+      expect((t.estado, t.tipo), ('APROBADO', 'SOLICITUD'));
     });
 
-    test('no se aprueba si la sede de origen no tiene suficiente', () async {
+    test('el vendedor sólo consulta: no solicita ni mueve', () async {
       await comoUsuario(vendedor);
-      final uuid = await traslados.crear(
-        sedeOrigenUuid: b,
-        sedeDestinoUuid: a,
-        lineas: [LineaTraslado(productoUuid: 'p1', descripcion: 'Arroz', cantidad: Cantidad.unidades(8))],
-      );
-      await comoUsuario(gerente);
-
-      await expectLater(traslados.aprobar(uuid), throwsA(isA<StateError>()));
-      expect(await stock(b), 5000);
-      expect(await stock(a), 10000);
-      expect((await cola()).map((o) => o.tipo), ['TRASLADO_CREAR'], reason: 'nada a medias en la cola');
-    });
-
-    test('el auxiliar no puede pedir traslados', () async {
-      await comoUsuario(auxiliar);
       await expectLater(
-        traslados.crear(
-          sedeOrigenUuid: b,
-          sedeDestinoUuid: a,
-          lineas: [LineaTraslado(productoUuid: 'p1', descripcion: 'Arroz', cantidad: Cantidad.unidades(1))],
-        ),
+        traslados.solicitar(sedeOrigenUuid: b, sedeDestinoUuid: a, lineas: [arroz(1)]),
         throwsStateError,
       );
+      await expectLater(
+        traslados.mover(sedeOrigenUuid: a, sedeDestinoUuid: b, lineas: [arroz(1)]),
+        throwsStateError,
+      );
+      expect(await cola(), isEmpty);
+    });
+
+    test('el gerente sólo solicita para una sede suya', () async {
+      await comoUsuario(gerenteA);
+      await expectLater(
+        traslados.solicitar(sedeOrigenUuid: a, sedeDestinoUuid: b, lineas: [arroz(1)]),
+        throwsStateError,
+      );
+      await expectLater(
+        traslados.mover(sedeOrigenUuid: b, sedeDestinoUuid: a, lineas: [arroz(1)]),
+        throwsStateError,
+        reason: 'el gerente solicita, no mueve',
+      );
+    });
+
+    test('no se despacha más de lo que hay en el origen', () async {
+      await comoUsuario(gerenteA);
+      final uuid = await traslados.solicitar(sedeOrigenUuid: b, sedeDestinoUuid: a, lineas: [arroz(8)]);
+      await comoUsuario(director);
+
+      await expectLater(traslados.despachar(uuid), throwsStateError, reason: 'B tiene 5 y se piden 8');
+      final l = await linea(uuid);
+      await expectLater(traslados.despachar(uuid, enviadas: {l.uuid: const Cantidad(0)}), throwsStateError,
+          reason: 'despachar cero es rechazar');
+      expect(await stock(b), 5000);
+      expect((await cola()).map((o) => o.tipo), ['TRASLADO_CREAR'], reason: 'nada a medias en la cola');
+
+      // Lo que sí hay, se puede enviar.
+      await traslados.despachar(uuid, enviadas: {l.uuid: Cantidad.unidades(5)});
+      expect(await stock(b), 0);
+    });
+
+    test('el director mueve unidades directamente, sin solicitud', () async {
+      await comoUsuario(director);
+      final uuid = await traslados.mover(sedeOrigenUuid: a, sedeDestinoUuid: b, lineas: [arroz(2)]);
+
+      expect(await stock(a), 8000);
+      expect(await stock(b), 7000);
+      final t = await (db.select(db.traslados)..where((x) => x.uuid.equals(uuid))).getSingle();
+      expect((t.estado, t.tipo, t.resueltoPorUuid), ('APROBADO', 'DIRECTO', director));
+
+      final op = (await cola()).single;
+      expect(op.tipo, 'TRASLADO_CREAR');
+      expect(op.payload['directo'], isTrue);
+      expect((op.payload['movimientos'] as List).single, containsPair('cantidad', '2.000'));
+      expect(
+        (op.payload['movimientos'] as List).single['detalle_uuid'],
+        (op.payload['detalles'] as List).single['uuid'],
+        reason: 'el servidor casa cada movimiento con su línea',
+      );
+    });
+
+    test('el auxiliar mueve desde su sede, no desde otra', () async {
+      await comoUsuario(auxiliar);
+      await traslados.mover(sedeOrigenUuid: a, sedeDestinoUuid: b, lineas: [arroz(1)]);
+      expect(await stock(a), 9000);
+      // La entrada en B la crea el servidor y llega con la siguiente bajada:
+      // el auxiliar de A no lleva el kardex de B.
+      expect(await stock(b), 5000);
+
+      await expectLater(
+        traslados.mover(sedeOrigenUuid: b, sedeDestinoUuid: a, lineas: [arroz(1)]),
+        throwsStateError,
+      );
+      await expectLater(
+        traslados.mover(sedeOrigenUuid: a, sedeDestinoUuid: b, lineas: [arroz(50)]),
+        throwsStateError,
+        reason: 'no envía más de lo que hay',
+      );
+    });
+
+    test('cancela la solicitud quien la pidió', () async {
+      await comoUsuario(gerenteA);
+      final uuid = await traslados.solicitar(sedeOrigenUuid: b, sedeDestinoUuid: a, lineas: [arroz(1)]);
+      await comoUsuario(auxiliarB);
+      await expectLater(traslados.cancelar(uuid), throwsStateError);
+      await comoUsuario(gerenteA);
+      await traslados.cancelar(uuid);
+      final t = await (db.select(db.traslados)..where((x) => x.uuid.equals(uuid))).getSingle();
+      expect(t.estado, 'CANCELADO');
     });
   });
 

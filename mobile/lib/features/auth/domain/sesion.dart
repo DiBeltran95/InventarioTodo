@@ -56,7 +56,19 @@ enum RolUsuario {
   bool get puedeEditarCatalogo => esGestor;
   bool get puedeAnularVentas => esGestor;
   bool get puedeGestionarUsuarios => esGestor;
-  bool get pideTraslados => this != RolUsuario.auxiliarInventario;
+  // ── Traslados entre sedes ──
+  // Ver en qué sedes hay un producto lo puede cualquiera. Solicitar unidades
+  // es del gerente; moverlas —despachar una solicitud o enviar sin ella—, del
+  // director o del auxiliar de inventario (de su sede).
+
+  /// Solicita unidades a otra sede para la suya.
+  bool get solicitaTraslados => this == RolUsuario.gerente;
+
+  /// Despacha solicitudes y mueve unidades directamente.
+  bool get mueveEntreSedes => this == RolUsuario.director || this == RolUsuario.auxiliarInventario;
+
+  /// Interviene en algún paso de un traslado (ve la sección de traslados).
+  bool get veTraslados => solicitaTraslados || mueveEntreSedes;
 
   /// Vendedores y auxiliares no ven costos ni márgenes: es información
   /// sensible del negocio.

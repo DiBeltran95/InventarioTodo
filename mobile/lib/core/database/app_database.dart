@@ -399,8 +399,12 @@ class Traslados extends Table {
   /// PENDIENTE · APROBADO · RECHAZADO · CANCELADO
   TextColumn get estado => text().withDefault(const Constant('PENDIENTE'))();
 
-  /// GESTOR: lo aprueba un gerente de la sede origen o el director.
-  /// ORIGEN: lo confirma alguien de la sede origen.
+  /// SOLICITUD: la pidió un gerente y espera despacho.
+  /// DIRECTO: la movió el director o un auxiliar; nace ya despachada.
+  TextColumn get tipo => text().withDefault(const Constant('SOLICITUD'))();
+
+  /// Heredado de la primera versión de traslados (GESTOR u ORIGEN). Ya no
+  /// decide nada: despacha siempre el auxiliar del origen o el director.
   TextColumn get confirma => text().withDefault(const Constant('GESTOR'))();
   TextColumn get notas => text().nullable()();
   TextColumn get solicitadoPorUuid => text().nullable()();
@@ -421,7 +425,13 @@ class TrasladoDetalles extends Table {
   TextColumn get trasladoUuid => text()();
   TextColumn get productoUuid => text().nullable()();
   TextColumn get descripcion => text()();
+
+  /// Lo pedido, en milésimas.
   IntColumn get cantidad => integer()();
+
+  /// Lo que de verdad salió (null mientras no se despacha). Puede ser menos
+  /// que lo pedido, o cero.
+  IntColumn get cantidadEnviada => integer().nullable()();
 
   @override
   Set<Column> get primaryKey => {uuid};
@@ -646,7 +656,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'inventario_pos'));
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -716,6 +726,18 @@ class AppDatabase extends _$AppDatabase {
 
             // El mínimo que había era el general.
             await customStatement('UPDATE productos SET stock_minimo_general = stock_minimo');
+          }
+
+          // v4 · Disponibilidad en todas las sedes y despacho parcial.
+          if (desde < 4) {
+            if (desde >= 3) {
+              await m.addColumn(traslados, traslados.tipo);
+              await m.addColumn(trasladoDetalles, trasladoDetalles.cantidadEnviada);
+            }
+            // Antes sólo bajaba el stock de las sedes propias; ahora baja el de
+            // todas. Sin reiniciar este cursor, las filas de las otras sedes que
+            // no hayan cambiado desde entonces no llegarían nunca.
+            await customStatement("DELETE FROM sync_cursores WHERE entidad = 'stock_sedes'");
           }
         },
         beforeOpen: (details) async {

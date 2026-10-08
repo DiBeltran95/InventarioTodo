@@ -1,12 +1,17 @@
 import '../../features/auth/domain/sesion.dart';
+import '../money/money.dart';
 
 /// Reglas de los traslados entre sedes, igual que en el servidor
 /// (backend/src/domain/traslados.js). La app las usa para mostrar sólo los
 /// botones que van a funcionar; la decisión final la toma el servidor.
 ///
-/// Siempre confirma «la otra parte», nunca quien lo pidió:
-///   · Lo pide un empleado → lo aprueba un gestor de la sede origen.
-///   · Lo pide un gestor → lo confirma alguien de la sede origen.
+///   · VER en qué sedes hay un producto: todos.
+///   · SOLICITAR unidades: el Gerente de Sede, para una sede suya y desde otra.
+///   · DESPACHAR o RECHAZAR una solicitud: el Director General o el Auxiliar
+///     de Inventario de la sede de origen, con las unidades que decida.
+///   · MOVER directamente: el director entre cualesquiera sedes; el auxiliar,
+///     desde la suya.
+///   · CANCELAR una solicitud pendiente: quien la pidió o el director.
 
 /// Usuario que mira el traslado: su rol y las sedes que ve (null = todas).
 class Actor {
@@ -19,35 +24,34 @@ class Actor {
   bool ve(String sedeUuid) => sedes == null || sedes!.contains(sedeUuid);
 }
 
-/// 'ORIGEN' si lo pide un gestor, 'GESTOR' si lo pide un empleado.
-String quienConfirma(RolUsuario rolCreador) => rolCreador.esGestor ? 'ORIGEN' : 'GESTOR';
-
-/// Motivo por el que no puede crear un traslado entre estas sedes, o null.
-String? motivoNoPuedeCrear(Actor actor, String origen, String destino) {
-  if (!actor.rol.pideTraslados) return 'Tu rol no puede pedir traslados';
-  if (origen == destino) return 'La sede de origen y la de destino deben ser distintas';
-  if (!actor.ve(origen) && !actor.ve(destino)) {
-    return 'Sólo puedes pedir traslados desde o hacia una sede tuya';
+/// Motivo por el que no puede SOLICITAR unidades de [origen] para [destino].
+String? motivoNoPuedeSolicitar(Actor actor, String origen, String destino) {
+  if (actor.rol != RolUsuario.gerente) {
+    return actor.rol.mueveEntreSedes
+        ? 'Tú mueves las unidades directamente: no necesitas solicitarlas'
+        : 'Sólo un gerente de sede solicita unidades a otra sede';
   }
+  if (origen == destino) return 'La sede de origen y la de destino deben ser distintas';
+  if (!actor.ve(destino)) return 'Sólo puedes solicitar unidades para una sede tuya';
   return null;
 }
 
-/// Motivo por el que no puede aprobar o rechazar, o null si puede.
-String? motivoNoPuedeResolver({
-  required String estado,
-  required String confirma,
-  required String sedeOrigen,
-  required String? solicitadoPor,
-  required Actor actor,
-}) {
-  if (estado != 'PENDIENTE') return 'El traslado ya fue resuelto';
-  if (solicitadoPor == actor.uuid) return 'Un traslado lo confirma otra persona, no quien lo pidió';
-  if (!actor.ve(sedeOrigen)) return 'Lo confirma alguien de la sede de origen';
-  if (confirma == 'GESTOR' && !actor.rol.esGestor) {
-    return 'Este traslado lo pidió un empleado: lo aprueba el gerente de la sede o el director';
+/// Motivo por el que no puede MOVER unidades directamente.
+String? motivoNoPuedeMover(Actor actor, String origen, String destino) {
+  if (origen == destino) return 'La sede de origen y la de destino deben ser distintas';
+  if (actor.rol.esDirector) return null;
+  if (actor.rol == RolUsuario.auxiliarInventario) {
+    return actor.ve(origen) ? null : 'Sólo puedes enviar unidades desde tu sede';
   }
-  if (confirma == 'ORIGEN' && !actor.rol.pideTraslados) return 'Tu rol no puede confirmar traslados';
-  return null;
+  return 'Mueven unidades entre sedes el Director General o el auxiliar de inventario de la sede';
+}
+
+/// Motivo por el que no puede despachar o rechazar esta solicitud, o null.
+String? motivoNoPuedeDespachar({required String estado, required String sedeOrigen, required Actor actor}) {
+  if (estado != 'PENDIENTE') return 'El traslado ya fue resuelto';
+  if (actor.rol.esDirector) return null;
+  if (actor.rol == RolUsuario.auxiliarInventario && actor.ve(sedeOrigen)) return null;
+  return 'Lo despacha el auxiliar de inventario de la sede de origen o el Director General';
 }
 
 String? motivoNoPuedeCancelar({
@@ -58,4 +62,20 @@ String? motivoNoPuedeCancelar({
   if (estado != 'PENDIENTE') return 'El traslado ya fue resuelto';
   if (solicitadoPor == actor.uuid || actor.rol.esDirector) return null;
   return 'Sólo quien lo pidió puede cancelarlo';
+}
+
+/// Lo que sale por línea al despachar: [enviadas] (uuid de línea → cantidad)
+/// manda; una línea ausente sale completa. Se puede enviar menos —o nada de
+/// una línea— pero algo tiene que salir: despachar cero es un rechazo.
+///
+/// Devuelve el motivo del error, o null si el reparto vale.
+String? motivoRepartoInvalido(Map<String, Cantidad> pedidas, Map<String, Cantidad> enviadas) {
+  var total = 0;
+  for (final e in pedidas.entries) {
+    final enviada = enviadas[e.key] ?? e.value;
+    if (enviada.esNegativa) return 'Una cantidad enviada no puede ser negativa';
+    total += enviada.milesimas;
+  }
+  if (total <= 0) return 'No se envía ninguna unidad: si no se puede atender, recházalo';
+  return null;
 }

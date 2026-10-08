@@ -77,20 +77,26 @@ class ProductosDao {
     if (soloActivos) consulta.where(db.productos.activo.equals(true));
 
     if (busqueda != null && busqueda.trim().isNotEmpty) {
-      final termino = normalizarBusqueda(busqueda);
+      // Cada palabra por separado y en cualquier orden: «a17 samsung» y
+      // «samsung galaxy a17» encuentran el mismo celular. Buscar la frase
+      // entera exigía escribirla tal como está en el catálogo.
+      //
       // Se busca contra la columna ya normalizada; comparar contra `nombre`
       // obligaría al usuario a escribir los acentos exactos.
-      consulta.where(
-        db.productos.nombreBusqueda.like('%$termino%') |
-            db.productos.sku.lower().like('%$termino%') |
-            existsQuery(
-              db.selectOnly(db.productoCodigos)
-                ..addColumns([db.productoCodigos.uuid])
-                ..where(db.productoCodigos.productoUuid.equalsExp(db.productos.uuid) &
-                    db.productoCodigos.deletedAt.isNull() &
-                    db.productoCodigos.codigo.like('%$termino%')),
-            ),
-      );
+      final terminos = normalizarBusqueda(busqueda).split(RegExp(r'\s+')).where((t) => t.isNotEmpty);
+      for (final termino in terminos) {
+        consulta.where(
+          db.productos.nombreBusqueda.like('%$termino%') |
+              db.productos.sku.lower().like('%$termino%') |
+              existsQuery(
+                db.selectOnly(db.productoCodigos)
+                  ..addColumns([db.productoCodigos.uuid])
+                  ..where(db.productoCodigos.productoUuid.equalsExp(db.productos.uuid) &
+                      db.productoCodigos.deletedAt.isNull() &
+                      db.productoCodigos.codigo.like('%$termino%')),
+              ),
+        );
+      }
     }
 
     if (categoriaUuid != null) {

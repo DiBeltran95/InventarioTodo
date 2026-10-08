@@ -10189,6 +10189,16 @@ class $TrasladosTable extends Traslados
     requiredDuringInsert: false,
     defaultValue: const Constant('PENDIENTE'),
   );
+  static const VerificationMeta _tipoMeta = const VerificationMeta('tipo');
+  @override
+  late final GeneratedColumn<String> tipo = GeneratedColumn<String>(
+    'tipo',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('SOLICITUD'),
+  );
   static const VerificationMeta _confirmaMeta = const VerificationMeta(
     'confirma',
   );
@@ -10296,6 +10306,7 @@ class $TrasladosTable extends Traslados
     sedeOrigenUuid,
     sedeDestinoUuid,
     estado,
+    tipo,
     confirma,
     notas,
     solicitadoPorUuid,
@@ -10360,6 +10371,12 @@ class $TrasladosTable extends Traslados
       context.handle(
         _estadoMeta,
         estado.isAcceptableOrUnknown(data['estado']!, _estadoMeta),
+      );
+    }
+    if (data.containsKey('tipo')) {
+      context.handle(
+        _tipoMeta,
+        tipo.isAcceptableOrUnknown(data['tipo']!, _tipoMeta),
       );
     }
     if (data.containsKey('confirma')) {
@@ -10459,6 +10476,10 @@ class $TrasladosTable extends Traslados
         DriftSqlType.string,
         data['${effectivePrefix}estado'],
       )!,
+      tipo: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tipo'],
+      )!,
       confirma: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}confirma'],
@@ -10513,8 +10534,12 @@ class Traslado extends DataClass implements Insertable<Traslado> {
   /// PENDIENTE · APROBADO · RECHAZADO · CANCELADO
   final String estado;
 
-  /// GESTOR: lo aprueba un gerente de la sede origen o el director.
-  /// ORIGEN: lo confirma alguien de la sede origen.
+  /// SOLICITUD: la pidió un gerente y espera despacho.
+  /// DIRECTO: la movió el director o un auxiliar; nace ya despachada.
+  final String tipo;
+
+  /// Heredado de la primera versión de traslados (GESTOR u ORIGEN). Ya no
+  /// decide nada: despacha siempre el auxiliar del origen o el director.
   final String confirma;
   final String? notas;
   final String? solicitadoPorUuid;
@@ -10530,6 +10555,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
     required this.sedeOrigenUuid,
     required this.sedeDestinoUuid,
     required this.estado,
+    required this.tipo,
     required this.confirma,
     this.notas,
     this.solicitadoPorUuid,
@@ -10548,6 +10574,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
     map['sede_origen_uuid'] = Variable<String>(sedeOrigenUuid);
     map['sede_destino_uuid'] = Variable<String>(sedeDestinoUuid);
     map['estado'] = Variable<String>(estado);
+    map['tipo'] = Variable<String>(tipo);
     map['confirma'] = Variable<String>(confirma);
     if (!nullToAbsent || notas != null) {
       map['notas'] = Variable<String>(notas);
@@ -10579,6 +10606,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
       sedeOrigenUuid: Value(sedeOrigenUuid),
       sedeDestinoUuid: Value(sedeDestinoUuid),
       estado: Value(estado),
+      tipo: Value(tipo),
       confirma: Value(confirma),
       notas: notas == null && nullToAbsent
           ? const Value.absent()
@@ -10614,6 +10642,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
       sedeOrigenUuid: serializer.fromJson<String>(json['sedeOrigenUuid']),
       sedeDestinoUuid: serializer.fromJson<String>(json['sedeDestinoUuid']),
       estado: serializer.fromJson<String>(json['estado']),
+      tipo: serializer.fromJson<String>(json['tipo']),
       confirma: serializer.fromJson<String>(json['confirma']),
       notas: serializer.fromJson<String?>(json['notas']),
       solicitadoPorUuid: serializer.fromJson<String?>(
@@ -10636,6 +10665,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
       'sedeOrigenUuid': serializer.toJson<String>(sedeOrigenUuid),
       'sedeDestinoUuid': serializer.toJson<String>(sedeDestinoUuid),
       'estado': serializer.toJson<String>(estado),
+      'tipo': serializer.toJson<String>(tipo),
       'confirma': serializer.toJson<String>(confirma),
       'notas': serializer.toJson<String?>(notas),
       'solicitadoPorUuid': serializer.toJson<String?>(solicitadoPorUuid),
@@ -10654,6 +10684,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
     String? sedeOrigenUuid,
     String? sedeDestinoUuid,
     String? estado,
+    String? tipo,
     String? confirma,
     Value<String?> notas = const Value.absent(),
     Value<String?> solicitadoPorUuid = const Value.absent(),
@@ -10669,6 +10700,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
     sedeOrigenUuid: sedeOrigenUuid ?? this.sedeOrigenUuid,
     sedeDestinoUuid: sedeDestinoUuid ?? this.sedeDestinoUuid,
     estado: estado ?? this.estado,
+    tipo: tipo ?? this.tipo,
     confirma: confirma ?? this.confirma,
     notas: notas.present ? notas.value : this.notas,
     solicitadoPorUuid: solicitadoPorUuid.present
@@ -10696,6 +10728,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
           ? data.sedeDestinoUuid.value
           : this.sedeDestinoUuid,
       estado: data.estado.present ? data.estado.value : this.estado,
+      tipo: data.tipo.present ? data.tipo.value : this.tipo,
       confirma: data.confirma.present ? data.confirma.value : this.confirma,
       notas: data.notas.present ? data.notas.value : this.notas,
       solicitadoPorUuid: data.solicitadoPorUuid.present
@@ -10726,6 +10759,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
           ..write('sedeOrigenUuid: $sedeOrigenUuid, ')
           ..write('sedeDestinoUuid: $sedeDestinoUuid, ')
           ..write('estado: $estado, ')
+          ..write('tipo: $tipo, ')
           ..write('confirma: $confirma, ')
           ..write('notas: $notas, ')
           ..write('solicitadoPorUuid: $solicitadoPorUuid, ')
@@ -10746,6 +10780,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
     sedeOrigenUuid,
     sedeDestinoUuid,
     estado,
+    tipo,
     confirma,
     notas,
     solicitadoPorUuid,
@@ -10765,6 +10800,7 @@ class Traslado extends DataClass implements Insertable<Traslado> {
           other.sedeOrigenUuid == this.sedeOrigenUuid &&
           other.sedeDestinoUuid == this.sedeDestinoUuid &&
           other.estado == this.estado &&
+          other.tipo == this.tipo &&
           other.confirma == this.confirma &&
           other.notas == this.notas &&
           other.solicitadoPorUuid == this.solicitadoPorUuid &&
@@ -10782,6 +10818,7 @@ class TrasladosCompanion extends UpdateCompanion<Traslado> {
   final Value<String> sedeOrigenUuid;
   final Value<String> sedeDestinoUuid;
   final Value<String> estado;
+  final Value<String> tipo;
   final Value<String> confirma;
   final Value<String?> notas;
   final Value<String?> solicitadoPorUuid;
@@ -10798,6 +10835,7 @@ class TrasladosCompanion extends UpdateCompanion<Traslado> {
     this.sedeOrigenUuid = const Value.absent(),
     this.sedeDestinoUuid = const Value.absent(),
     this.estado = const Value.absent(),
+    this.tipo = const Value.absent(),
     this.confirma = const Value.absent(),
     this.notas = const Value.absent(),
     this.solicitadoPorUuid = const Value.absent(),
@@ -10815,6 +10853,7 @@ class TrasladosCompanion extends UpdateCompanion<Traslado> {
     required String sedeOrigenUuid,
     required String sedeDestinoUuid,
     this.estado = const Value.absent(),
+    this.tipo = const Value.absent(),
     this.confirma = const Value.absent(),
     this.notas = const Value.absent(),
     this.solicitadoPorUuid = const Value.absent(),
@@ -10836,6 +10875,7 @@ class TrasladosCompanion extends UpdateCompanion<Traslado> {
     Expression<String>? sedeOrigenUuid,
     Expression<String>? sedeDestinoUuid,
     Expression<String>? estado,
+    Expression<String>? tipo,
     Expression<String>? confirma,
     Expression<String>? notas,
     Expression<String>? solicitadoPorUuid,
@@ -10853,6 +10893,7 @@ class TrasladosCompanion extends UpdateCompanion<Traslado> {
       if (sedeOrigenUuid != null) 'sede_origen_uuid': sedeOrigenUuid,
       if (sedeDestinoUuid != null) 'sede_destino_uuid': sedeDestinoUuid,
       if (estado != null) 'estado': estado,
+      if (tipo != null) 'tipo': tipo,
       if (confirma != null) 'confirma': confirma,
       if (notas != null) 'notas': notas,
       if (solicitadoPorUuid != null) 'solicitado_por_uuid': solicitadoPorUuid,
@@ -10872,6 +10913,7 @@ class TrasladosCompanion extends UpdateCompanion<Traslado> {
     Value<String>? sedeOrigenUuid,
     Value<String>? sedeDestinoUuid,
     Value<String>? estado,
+    Value<String>? tipo,
     Value<String>? confirma,
     Value<String?>? notas,
     Value<String?>? solicitadoPorUuid,
@@ -10889,6 +10931,7 @@ class TrasladosCompanion extends UpdateCompanion<Traslado> {
       sedeOrigenUuid: sedeOrigenUuid ?? this.sedeOrigenUuid,
       sedeDestinoUuid: sedeDestinoUuid ?? this.sedeDestinoUuid,
       estado: estado ?? this.estado,
+      tipo: tipo ?? this.tipo,
       confirma: confirma ?? this.confirma,
       notas: notas ?? this.notas,
       solicitadoPorUuid: solicitadoPorUuid ?? this.solicitadoPorUuid,
@@ -10919,6 +10962,9 @@ class TrasladosCompanion extends UpdateCompanion<Traslado> {
     }
     if (estado.present) {
       map['estado'] = Variable<String>(estado.value);
+    }
+    if (tipo.present) {
+      map['tipo'] = Variable<String>(tipo.value);
     }
     if (confirma.present) {
       map['confirma'] = Variable<String>(confirma.value);
@@ -10961,6 +11007,7 @@ class TrasladosCompanion extends UpdateCompanion<Traslado> {
           ..write('sedeOrigenUuid: $sedeOrigenUuid, ')
           ..write('sedeDestinoUuid: $sedeDestinoUuid, ')
           ..write('estado: $estado, ')
+          ..write('tipo: $tipo, ')
           ..write('confirma: $confirma, ')
           ..write('notas: $notas, ')
           ..write('solicitadoPorUuid: $solicitadoPorUuid, ')
@@ -11035,6 +11082,17 @@ class $TrasladoDetallesTable extends TrasladoDetalles
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _cantidadEnviadaMeta = const VerificationMeta(
+    'cantidadEnviada',
+  );
+  @override
+  late final GeneratedColumn<int> cantidadEnviada = GeneratedColumn<int>(
+    'cantidad_enviada',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     uuid,
@@ -11042,6 +11100,7 @@ class $TrasladoDetallesTable extends TrasladoDetalles
     productoUuid,
     descripcion,
     cantidad,
+    cantidadEnviada,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -11102,6 +11161,15 @@ class $TrasladoDetallesTable extends TrasladoDetalles
     } else if (isInserting) {
       context.missing(_cantidadMeta);
     }
+    if (data.containsKey('cantidad_enviada')) {
+      context.handle(
+        _cantidadEnviadaMeta,
+        cantidadEnviada.isAcceptableOrUnknown(
+          data['cantidad_enviada']!,
+          _cantidadEnviadaMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -11131,6 +11199,10 @@ class $TrasladoDetallesTable extends TrasladoDetalles
         DriftSqlType.int,
         data['${effectivePrefix}cantidad'],
       )!,
+      cantidadEnviada: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}cantidad_enviada'],
+      ),
     );
   }
 
@@ -11145,13 +11217,20 @@ class TrasladoDetalle extends DataClass implements Insertable<TrasladoDetalle> {
   final String trasladoUuid;
   final String? productoUuid;
   final String descripcion;
+
+  /// Lo pedido, en milésimas.
   final int cantidad;
+
+  /// Lo que de verdad salió (null mientras no se despacha). Puede ser menos
+  /// que lo pedido, o cero.
+  final int? cantidadEnviada;
   const TrasladoDetalle({
     required this.uuid,
     required this.trasladoUuid,
     this.productoUuid,
     required this.descripcion,
     required this.cantidad,
+    this.cantidadEnviada,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -11163,6 +11242,9 @@ class TrasladoDetalle extends DataClass implements Insertable<TrasladoDetalle> {
     }
     map['descripcion'] = Variable<String>(descripcion);
     map['cantidad'] = Variable<int>(cantidad);
+    if (!nullToAbsent || cantidadEnviada != null) {
+      map['cantidad_enviada'] = Variable<int>(cantidadEnviada);
+    }
     return map;
   }
 
@@ -11175,6 +11257,9 @@ class TrasladoDetalle extends DataClass implements Insertable<TrasladoDetalle> {
           : Value(productoUuid),
       descripcion: Value(descripcion),
       cantidad: Value(cantidad),
+      cantidadEnviada: cantidadEnviada == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cantidadEnviada),
     );
   }
 
@@ -11189,6 +11274,7 @@ class TrasladoDetalle extends DataClass implements Insertable<TrasladoDetalle> {
       productoUuid: serializer.fromJson<String?>(json['productoUuid']),
       descripcion: serializer.fromJson<String>(json['descripcion']),
       cantidad: serializer.fromJson<int>(json['cantidad']),
+      cantidadEnviada: serializer.fromJson<int?>(json['cantidadEnviada']),
     );
   }
   @override
@@ -11200,6 +11286,7 @@ class TrasladoDetalle extends DataClass implements Insertable<TrasladoDetalle> {
       'productoUuid': serializer.toJson<String?>(productoUuid),
       'descripcion': serializer.toJson<String>(descripcion),
       'cantidad': serializer.toJson<int>(cantidad),
+      'cantidadEnviada': serializer.toJson<int?>(cantidadEnviada),
     };
   }
 
@@ -11209,12 +11296,16 @@ class TrasladoDetalle extends DataClass implements Insertable<TrasladoDetalle> {
     Value<String?> productoUuid = const Value.absent(),
     String? descripcion,
     int? cantidad,
+    Value<int?> cantidadEnviada = const Value.absent(),
   }) => TrasladoDetalle(
     uuid: uuid ?? this.uuid,
     trasladoUuid: trasladoUuid ?? this.trasladoUuid,
     productoUuid: productoUuid.present ? productoUuid.value : this.productoUuid,
     descripcion: descripcion ?? this.descripcion,
     cantidad: cantidad ?? this.cantidad,
+    cantidadEnviada: cantidadEnviada.present
+        ? cantidadEnviada.value
+        : this.cantidadEnviada,
   );
   TrasladoDetalle copyWithCompanion(TrasladoDetallesCompanion data) {
     return TrasladoDetalle(
@@ -11229,6 +11320,9 @@ class TrasladoDetalle extends DataClass implements Insertable<TrasladoDetalle> {
           ? data.descripcion.value
           : this.descripcion,
       cantidad: data.cantidad.present ? data.cantidad.value : this.cantidad,
+      cantidadEnviada: data.cantidadEnviada.present
+          ? data.cantidadEnviada.value
+          : this.cantidadEnviada,
     );
   }
 
@@ -11239,14 +11333,21 @@ class TrasladoDetalle extends DataClass implements Insertable<TrasladoDetalle> {
           ..write('trasladoUuid: $trasladoUuid, ')
           ..write('productoUuid: $productoUuid, ')
           ..write('descripcion: $descripcion, ')
-          ..write('cantidad: $cantidad')
+          ..write('cantidad: $cantidad, ')
+          ..write('cantidadEnviada: $cantidadEnviada')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(uuid, trasladoUuid, productoUuid, descripcion, cantidad);
+  int get hashCode => Object.hash(
+    uuid,
+    trasladoUuid,
+    productoUuid,
+    descripcion,
+    cantidad,
+    cantidadEnviada,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -11255,7 +11356,8 @@ class TrasladoDetalle extends DataClass implements Insertable<TrasladoDetalle> {
           other.trasladoUuid == this.trasladoUuid &&
           other.productoUuid == this.productoUuid &&
           other.descripcion == this.descripcion &&
-          other.cantidad == this.cantidad);
+          other.cantidad == this.cantidad &&
+          other.cantidadEnviada == this.cantidadEnviada);
 }
 
 class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
@@ -11264,6 +11366,7 @@ class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
   final Value<String?> productoUuid;
   final Value<String> descripcion;
   final Value<int> cantidad;
+  final Value<int?> cantidadEnviada;
   final Value<int> rowid;
   const TrasladoDetallesCompanion({
     this.uuid = const Value.absent(),
@@ -11271,6 +11374,7 @@ class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
     this.productoUuid = const Value.absent(),
     this.descripcion = const Value.absent(),
     this.cantidad = const Value.absent(),
+    this.cantidadEnviada = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TrasladoDetallesCompanion.insert({
@@ -11279,6 +11383,7 @@ class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
     this.productoUuid = const Value.absent(),
     required String descripcion,
     required int cantidad,
+    this.cantidadEnviada = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : uuid = Value(uuid),
        trasladoUuid = Value(trasladoUuid),
@@ -11290,6 +11395,7 @@ class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
     Expression<String>? productoUuid,
     Expression<String>? descripcion,
     Expression<int>? cantidad,
+    Expression<int>? cantidadEnviada,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -11298,6 +11404,7 @@ class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
       if (productoUuid != null) 'producto_uuid': productoUuid,
       if (descripcion != null) 'descripcion': descripcion,
       if (cantidad != null) 'cantidad': cantidad,
+      if (cantidadEnviada != null) 'cantidad_enviada': cantidadEnviada,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -11308,6 +11415,7 @@ class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
     Value<String?>? productoUuid,
     Value<String>? descripcion,
     Value<int>? cantidad,
+    Value<int?>? cantidadEnviada,
     Value<int>? rowid,
   }) {
     return TrasladoDetallesCompanion(
@@ -11316,6 +11424,7 @@ class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
       productoUuid: productoUuid ?? this.productoUuid,
       descripcion: descripcion ?? this.descripcion,
       cantidad: cantidad ?? this.cantidad,
+      cantidadEnviada: cantidadEnviada ?? this.cantidadEnviada,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -11338,6 +11447,9 @@ class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
     if (cantidad.present) {
       map['cantidad'] = Variable<int>(cantidad.value);
     }
+    if (cantidadEnviada.present) {
+      map['cantidad_enviada'] = Variable<int>(cantidadEnviada.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -11352,6 +11464,7 @@ class TrasladoDetallesCompanion extends UpdateCompanion<TrasladoDetalle> {
           ..write('productoUuid: $productoUuid, ')
           ..write('descripcion: $descripcion, ')
           ..write('cantidad: $cantidad, ')
+          ..write('cantidadEnviada: $cantidadEnviada, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -21223,6 +21336,7 @@ typedef $$TrasladosTableCreateCompanionBuilder =
       required String sedeOrigenUuid,
       required String sedeDestinoUuid,
       Value<String> estado,
+      Value<String> tipo,
       Value<String> confirma,
       Value<String?> notas,
       Value<String?> solicitadoPorUuid,
@@ -21241,6 +21355,7 @@ typedef $$TrasladosTableUpdateCompanionBuilder =
       Value<String> sedeOrigenUuid,
       Value<String> sedeDestinoUuid,
       Value<String> estado,
+      Value<String> tipo,
       Value<String> confirma,
       Value<String?> notas,
       Value<String?> solicitadoPorUuid,
@@ -21284,6 +21399,11 @@ class $$TrasladosTableFilterComposer
 
   ColumnFilters<String> get estado => $composableBuilder(
     column: $table.estado,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get tipo => $composableBuilder(
+    column: $table.tipo,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -21367,6 +21487,11 @@ class $$TrasladosTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get tipo => $composableBuilder(
+    column: $table.tipo,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get confirma => $composableBuilder(
     column: $table.confirma,
     builder: (column) => ColumnOrderings(column),
@@ -21441,6 +21566,9 @@ class $$TrasladosTableAnnotationComposer
   GeneratedColumn<String> get estado =>
       $composableBuilder(column: $table.estado, builder: (column) => column);
 
+  GeneratedColumn<String> get tipo =>
+      $composableBuilder(column: $table.tipo, builder: (column) => column);
+
   GeneratedColumn<String> get confirma =>
       $composableBuilder(column: $table.confirma, builder: (column) => column);
 
@@ -21512,6 +21640,7 @@ class $$TrasladosTableTableManager
                 Value<String> sedeOrigenUuid = const Value.absent(),
                 Value<String> sedeDestinoUuid = const Value.absent(),
                 Value<String> estado = const Value.absent(),
+                Value<String> tipo = const Value.absent(),
                 Value<String> confirma = const Value.absent(),
                 Value<String?> notas = const Value.absent(),
                 Value<String?> solicitadoPorUuid = const Value.absent(),
@@ -21528,6 +21657,7 @@ class $$TrasladosTableTableManager
                 sedeOrigenUuid: sedeOrigenUuid,
                 sedeDestinoUuid: sedeDestinoUuid,
                 estado: estado,
+                tipo: tipo,
                 confirma: confirma,
                 notas: notas,
                 solicitadoPorUuid: solicitadoPorUuid,
@@ -21546,6 +21676,7 @@ class $$TrasladosTableTableManager
                 required String sedeOrigenUuid,
                 required String sedeDestinoUuid,
                 Value<String> estado = const Value.absent(),
+                Value<String> tipo = const Value.absent(),
                 Value<String> confirma = const Value.absent(),
                 Value<String?> notas = const Value.absent(),
                 Value<String?> solicitadoPorUuid = const Value.absent(),
@@ -21562,6 +21693,7 @@ class $$TrasladosTableTableManager
                 sedeOrigenUuid: sedeOrigenUuid,
                 sedeDestinoUuid: sedeDestinoUuid,
                 estado: estado,
+                tipo: tipo,
                 confirma: confirma,
                 notas: notas,
                 solicitadoPorUuid: solicitadoPorUuid,
@@ -21602,6 +21734,7 @@ typedef $$TrasladoDetallesTableCreateCompanionBuilder =
       Value<String?> productoUuid,
       required String descripcion,
       required int cantidad,
+      Value<int?> cantidadEnviada,
       Value<int> rowid,
     });
 typedef $$TrasladoDetallesTableUpdateCompanionBuilder =
@@ -21611,6 +21744,7 @@ typedef $$TrasladoDetallesTableUpdateCompanionBuilder =
       Value<String?> productoUuid,
       Value<String> descripcion,
       Value<int> cantidad,
+      Value<int?> cantidadEnviada,
       Value<int> rowid,
     });
 
@@ -21645,6 +21779,11 @@ class $$TrasladoDetallesTableFilterComposer
 
   ColumnFilters<int> get cantidad => $composableBuilder(
     column: $table.cantidad,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get cantidadEnviada => $composableBuilder(
+    column: $table.cantidadEnviada,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -21682,6 +21821,11 @@ class $$TrasladoDetallesTableOrderingComposer
     column: $table.cantidad,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<int> get cantidadEnviada => $composableBuilder(
+    column: $table.cantidadEnviada,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$TrasladoDetallesTableAnnotationComposer
@@ -21713,6 +21857,11 @@ class $$TrasladoDetallesTableAnnotationComposer
 
   GeneratedColumn<int> get cantidad =>
       $composableBuilder(column: $table.cantidad, builder: (column) => column);
+
+  GeneratedColumn<int> get cantidadEnviada => $composableBuilder(
+    column: $table.cantidadEnviada,
+    builder: (column) => column,
+  );
 }
 
 class $$TrasladoDetallesTableTableManager
@@ -21757,6 +21906,7 @@ class $$TrasladoDetallesTableTableManager
                 Value<String?> productoUuid = const Value.absent(),
                 Value<String> descripcion = const Value.absent(),
                 Value<int> cantidad = const Value.absent(),
+                Value<int?> cantidadEnviada = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TrasladoDetallesCompanion(
                 uuid: uuid,
@@ -21764,6 +21914,7 @@ class $$TrasladoDetallesTableTableManager
                 productoUuid: productoUuid,
                 descripcion: descripcion,
                 cantidad: cantidad,
+                cantidadEnviada: cantidadEnviada,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -21773,6 +21924,7 @@ class $$TrasladoDetallesTableTableManager
                 Value<String?> productoUuid = const Value.absent(),
                 required String descripcion,
                 required int cantidad,
+                Value<int?> cantidadEnviada = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TrasladoDetallesCompanion.insert(
                 uuid: uuid,
@@ -21780,6 +21932,7 @@ class $$TrasladoDetallesTableTableManager
                 productoUuid: productoUuid,
                 descripcion: descripcion,
                 cantidad: cantidad,
+                cantidadEnviada: cantidadEnviada,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

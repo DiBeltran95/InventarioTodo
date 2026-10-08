@@ -110,16 +110,27 @@ void main() {
       final metodos = MetodosPagoDao(db, outbox);
       final recaudos = RecaudosDao(db, outbox);
 
-      // 1. El vendedor pide 3 a la sede nueva; el gerente lo aprueba.
-      await como('vendedor');
-      final traslado = await traslados.crear(
+      LineaTraslado lineaDe(int unidades) => LineaTraslado(
+            productoUuid: p['uuid'] as String,
+            descripcion: p['nombre'] as String,
+            cantidad: Cantidad.unidades(unidades),
+          );
+
+      // 1. El gerente solicita 3 de la principal para la sede nueva; el
+      //    auxiliar de la principal despacha sólo 2. Después el auxiliar mueve
+      //    1 más directamente. En total llegan 3.
+      await como('gerente');
+      final traslado = await traslados.solicitar(
         sedeOrigenUuid: principal,
         sedeDestinoUuid: nueva,
-        lineas: [LineaTraslado(productoUuid: p['uuid'] as String, descripcion: p['nombre'] as String, cantidad: Cantidad.unidades(3))],
+        lineas: [lineaDe(3)],
         notas: 'Contrato',
       );
-      await como('gerente');
-      await traslados.aprobar(traslado);
+      await como('auxiliar');
+      final detalle =
+          await (db.select(db.trasladoDetalles)..where((d) => d.trasladoUuid.equals(traslado))).getSingle();
+      await traslados.despachar(traslado, enviadas: {detalle.uuid: Cantidad.unidades(2)});
+      await traslados.mover(sedeOrigenUuid: principal, sedeDestinoUuid: nueva, lineas: [lineaDe(1)]);
 
       // 2. El vendedor abre caja, vende 1 en efectivo y cierra contando lo esperado.
       await como('vendedor');
@@ -195,6 +206,7 @@ void main() {
       expect(ops.map((o) => o['tipo']), [
         'TRASLADO_CREAR',
         'TRASLADO_APROBAR',
+        'TRASLADO_CREAR',
         'CIERRE_ABRIR',
         'VENTA_CREAR',
         'CIERRE_CERRAR',

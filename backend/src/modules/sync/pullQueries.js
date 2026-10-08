@@ -21,9 +21,13 @@
  * dispositivo desconectado nunca se enteraría.
  *
  * ── Alcance ──────────────────────────────────────────────────────────────────
- * Lo que pertenece a una sede (ventas, stock, movimientos, traslados, cierres,
+ * Lo que pertenece a una sede (ventas, movimientos, traslados, cierres,
  * alertas) sólo baja a quien la ve: el vendedor, su sede; el gerente, las
  * suyas; el director, todas. El catálogo es común y baja entero.
+ *
+ * La EXCEPCIÓN es stock_sedes: baja el de todas las sedes a todos. Cualquier
+ * empleado tiene que poder decirle a un cliente «aquí no queda, pero en Norte
+ * hay 3», también sin red. Es sólo cantidad por producto y sede: sin costos.
  *
  * Orden de los parámetros de cada consulta, que es el que arma `pull()`:
  *   [t, t, i] (keyset) · [horizonte] si `horizonte` · ...extra(ctx) · límite
@@ -138,14 +142,13 @@ export const CONSULTAS = {
 
   stock_sedes: {
     horizonte: false,
-    extra: alcance,
     sql: `
       SELECT ss.id AS _id, p.uuid AS producto_uuid, s.uuid AS sede_uuid,
              ss.stock_actual, ss.stock_minimo, ss.updated_at
         FROM stock_sedes ss
         JOIN productos p ON p.id = ss.producto_id
         JOIN sedes s ON s.id = ss.sede_id
-       WHERE ${KEYSET('ss')} AND ${SEDE('ss.sede_id')}
+       WHERE ${KEYSET('ss')}
        ORDER BY ss.updated_at, ss.id LIMIT ?`,
   },
 
@@ -241,7 +244,7 @@ export const CONSULTAS = {
     extra: (ctx) => [...alcance(ctx), ...alcance(ctx)],
     sql: `
       SELECT t.id AS _id, t.uuid, t.numero, so.uuid AS sede_origen_uuid, sd.uuid AS sede_destino_uuid,
-             t.estado, t.confirma, t.notas,
+             t.estado, t.tipo, t.confirma, t.notas,
              us.uuid AS solicitado_por_uuid, t.solicitado_en,
              ur.uuid AS resuelto_por_uuid, t.resuelto_en, t.motivo_rechazo,
              t.updated_at, t.deleted_at
@@ -259,7 +262,7 @@ export const CONSULTAS = {
     extra: (ctx) => [...alcance(ctx), ...alcance(ctx)],
     sql: `
       SELECT d.id AS _id, d.uuid, t.uuid AS traslado_uuid, p.uuid AS producto_uuid,
-             d.descripcion, d.cantidad, d.updated_at
+             d.descripcion, d.cantidad, d.cantidad_enviada, d.updated_at
         FROM traslado_detalles d
         JOIN traslados t ON t.id = d.traslado_id
         LEFT JOIN productos p ON p.id = d.producto_id

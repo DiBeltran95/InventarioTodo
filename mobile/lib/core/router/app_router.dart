@@ -13,6 +13,7 @@ import '../../features/caja/presentation/caja_page.dart';
 import '../../features/categorias/presentation/categorias_page.dart';
 import '../../features/cuentas/presentation/cuentas_por_cobrar_page.dart';
 import '../../features/dashboard/presentation/dashboard_page.dart';
+import '../../features/disponibilidad/presentation/disponibilidad_page.dart';
 import '../../features/inventario/presentation/entrada_page.dart';
 import '../../features/inventario/presentation/movimientos_page.dart';
 import '../../features/inventario/presentation/solicitudes_ajuste_page.dart';
@@ -75,6 +76,7 @@ class Rutas {
   static const cuentasPorCobrar = '/cuentas-por-cobrar';
   static const auditoria = '/auditoria';
   static const cambioSede = '/cambio-sede';
+  static const disponibilidad = '/disponibilidad';
 
   static String trasladoDetalle(String uuid) => '/traslados/$uuid';
   static String productoDetalle(String uuid) => '/productos/$uuid';
@@ -139,7 +141,10 @@ bool puedeAbrir(Uri ubicacion, RolUsuario rol) {
     };
   }
 
-  if (en(Rutas.traslados)) return rol.pideTraslados;
+  // Ver dónde hay un producto, cualquiera. Los traslados, quien interviene en
+  // ellos: el gerente solicita; el director y el auxiliar despachan y mueven.
+  if (en(Rutas.disponibilidad)) return true;
+  if (en(Rutas.traslados)) return rol.veTraslados;
 
   // Sólo quien pertenece a una sede pide pasar a otra; las de un gerente las
   // asigna el director.
@@ -344,6 +349,7 @@ final routerProvider = Provider<GoRouter>((ref) {
             builder: (context, estado) => TrasladoNuevoPage(
               productoUuid: estado.uri.queryParameters['producto'],
               sedeDestinoUuid: estado.uri.queryParameters['destino'],
+              sedeOrigenUuid: estado.uri.queryParameters['origen'],
             ),
           ),
           GoRoute(
@@ -352,6 +358,11 @@ final routerProvider = Provider<GoRouter>((ref) {
             builder: (context, estado) => TrasladoDetallePage(uuid: estado.pathParameters['uuid']!),
           ),
         ],
+      ),
+      GoRoute(
+        path: Rutas.disponibilidad,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => DisponibilidadPage(productoUuid: estado.uri.queryParameters['producto']),
       ),
       GoRoute(
         path: Rutas.stockBajo,

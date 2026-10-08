@@ -144,12 +144,22 @@ void main() {
       expect(abre(Rutas.cambioSede, g), isFalse, reason: 'sus sedes las asigna el director');
     });
 
-    test('el vendedor vende y pide traslados, pero no toca inventario ni catálogo', () {
+    test('el vendedor vende y consulta otras sedes, pero no toca inventario ni traslados', () {
       const v = RolUsuario.vendedor;
-      for (final ruta in [Rutas.carrito, Rutas.caja, Rutas.ventas, '/ventas/abc', Rutas.traslados, Rutas.cambioSede]) {
+      for (final ruta in [
+        Rutas.carrito,
+        Rutas.caja,
+        Rutas.ventas,
+        '/ventas/abc',
+        Rutas.cambioSede,
+        Rutas.disponibilidad,
+        '${Rutas.disponibilidad}?producto=x',
+      ]) {
         expect(abre(ruta, v), isTrue, reason: ruta);
       }
       for (final ruta in [
+        Rutas.traslados,
+        Rutas.trasladoNuevo,
         Rutas.entrada,
         Rutas.movimientos,
         Rutas.productoNuevo,
@@ -182,7 +192,6 @@ void main() {
         Rutas.ventas,
         Rutas.escanear, // sin modo = venta
         '${Rutas.escanear}?modo=venta',
-        Rutas.traslados,
         Rutas.productoNuevo,
         Rutas.reportes,
       ]) {
@@ -190,9 +199,25 @@ void main() {
       }
     });
 
+    test('traslados: los ve quien solicita (gerente) o mueve (director y auxiliar)', () {
+      for (final rol in [RolUsuario.gerente, RolUsuario.director, RolUsuario.auxiliarInventario]) {
+        expect(abre(Rutas.traslados, rol), isTrue, reason: rol.etiqueta);
+        expect(abre(Rutas.trasladoNuevo, rol), isTrue, reason: rol.etiqueta);
+        expect(abre('/traslados/abc', rol), isTrue, reason: rol.etiqueta);
+      }
+      expect(abre(Rutas.traslados, RolUsuario.vendedor), isFalse);
+    });
+
     test('las rutas comunes las abre cualquiera', () {
       for (final rol in RolUsuario.values) {
-        for (final ruta in [Rutas.dashboard, Rutas.productos, '/productos/abc', Rutas.ajustes, Rutas.pendientes]) {
+        for (final ruta in [
+          Rutas.dashboard,
+          Rutas.productos,
+          '/productos/abc',
+          Rutas.ajustes,
+          Rutas.pendientes,
+          Rutas.disponibilidad,
+        ]) {
           expect(abre(ruta, rol), isTrue, reason: '${rol.etiqueta} → $ruta');
         }
       }

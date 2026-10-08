@@ -12,7 +12,7 @@ import {
 import { CONSULTAS, ENTIDADES } from './pullQueries.js';
 import { sumarDias, diaHabil } from '../../utils/dates.js';
 import { veSede, huellaAlcance } from '../../domain/alcance.js';
-import { ROLES_QUE_PIDEN_TRASLADOS } from '../../domain/traslados.js';
+import { ROLES_DE_TRASLADOS, ROLES_QUE_DESPACHAN } from '../../domain/traslados.js';
 import { cargarAlcance, sedePorUuid, sedeDeDispositivo, sedePrincipal } from '../sedes/repo.js';
 
 import * as productos from '../productos/service.js';
@@ -113,10 +113,12 @@ const PERMISOS = Object.freeze({
   CONTEO_AJUSTAR: ROLES_GESTORES,
   VENTA_CREAR: ROLES_QUE_VENDEN,
   VENTA_ANULAR: ROLES_GESTORES,
-  TRASLADO_CREAR: ROLES_QUE_PIDEN_TRASLADOS,
-  TRASLADO_APROBAR: ROLES_QUE_PIDEN_TRASLADOS,
-  TRASLADO_RECHAZAR: ROLES_QUE_PIDEN_TRASLADOS,
-  TRASLADO_CANCELAR: ROLES_QUE_PIDEN_TRASLADOS,
+  // Crear: el gerente solicita; el director o el auxiliar mueven directamente.
+  // La regla fina (para qué sede, desde cuál) está en domain/traslados.js.
+  TRASLADO_CREAR: ROLES_DE_TRASLADOS,
+  TRASLADO_APROBAR: ROLES_QUE_DESPACHAN,
+  TRASLADO_RECHAZAR: ROLES_QUE_DESPACHAN,
+  TRASLADO_CANCELAR: ROLES_DE_TRASLADOS,
   AJUSTE_SOLICITAR: [ROLES.AUXILIAR_INVENTARIO],
   AJUSTE_APROBAR: ROLES_GESTORES,
   AJUSTE_RECHAZAR: ROLES_GESTORES,
@@ -158,7 +160,12 @@ const AUTOR_DIFERIDO = new Set([
   'TRASLADO_CREAR',
   'AJUSTE_SOLICITAR',
 ]);
-const admiteAutorDiferido = (op) => AUTOR_DIFERIDO.has(op.tipo) || esEntrada(op);
+// Una solicitud de traslado registra un pedido; un movimiento directo mueve
+// stock entre sedes y por eso espera a su autor, como cualquier otro cambio de
+// inventario.
+const esMovimientoDirecto = (op) => op.tipo === 'TRASLADO_CREAR' && op.payload?.directo === true;
+const admiteAutorDiferido = (op) =>
+  (AUTOR_DIFERIDO.has(op.tipo) && !esMovimientoDirecto(op)) || esEntrada(op);
 
 /**
  * Operaciones cuya sede se valida contra el alcance del autor. Las que

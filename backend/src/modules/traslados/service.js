@@ -1,9 +1,17 @@
 /**
  * Traslados entre sedes.
  *
- * Flujo simple: PENDIENTE → APROBADO mueve el stock en el acto (sale de la
- * sede origen, entra en la destino) dentro de la MISMA transacción que cambia
- * el estado. Las reglas de quién puede qué están en src/domain/traslados.js.
+ * Flujo simple: PENDIENTE → APROBADO («despachado») mueve el stock en el acto
+ * (sale de la sede origen, entra en la destino) dentro de la MISMA transacción
+ * que cambia el estado. Las reglas de quién puede qué están en
+ * src/domain/traslados.js.
+ *
+ * Dos formas de nacer:
+ *   · SOLICITUD: la pide un gerente y queda PENDIENTE hasta que el auxiliar de
+ *     la sede origen o el director la despachan —con las unidades que decidan—
+ *     o la rechazan.
+ *   · DIRECTO: el director o un auxiliar mueven unidades sin solicitud; nace y
+ *     se despacha en la misma operación.
  *
  * Todo cambio de estado deja un evento con su usuario y su hora: el historial
  * del traslado es la trazabilidad que pide el negocio.
@@ -17,7 +25,13 @@ import { txQuery, txQueryOne, txExecute } from '../../db/tx.js';
 import { nuevoUuid } from '../../utils/ids.js';
 import { badRequest, conflict, forbidden, notFound } from '../../utils/ApiError.js';
 import { toQty, fromQty } from '../../utils/money.js';
-import { quienConfirma, puedeCrear, puedeResolver, puedeCancelar } from '../../domain/traslados.js';
+import {
+  puedeSolicitar,
+  puedeMover,
+  puedeDespachar,
+  puedeCancelar,
+  repartoDeDespacho,
+} from '../../domain/traslados.js';
 import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
 import { bloquearProductos, insertarMovimiento, stockEnSede } from '../inventario/service.js';
 import { sedePorUuid } from '../sedes/repo.js';
@@ -77,7 +91,10 @@ export async function crearTraslado(conn, p, ctx) {
   if (!origen || !destino) throw notFound('Sede');
   if (!origen.activo || !destino.activo) throw badRequest('SEDE_INACTIVA', 'Una de las sedes está desactivada');
 
-  const motivo = puedeCrear(usuarioDe(ctx), origen.id, destino.id);
+  const directo = p.directo === true;
+  const motivo = directo
+    ? puedeMover(usuarioDe(ctx), origen.id, destino.id)
+    : puedeSolicitar(usuarioDe(ctx), origen.id, destino.id);
   if (motivo) throw forbidden(motivo, 'SIN_PERMISO');
 
   const productos = await txQuery(
@@ -95,15 +112,15 @@ export async function crearTraslado(conn, p, ctx) {
       const r = await txExecute(
         conn,
         `INSERT INTO traslados
-           (uuid, numero, sede_origen_id, sede_destino_id, estado, confirma, notas,
+           (uuid, numero, sede_origen_id, sede_destino_id, estado, tipo, confirma, notas,
             solicitado_por, solicitado_en, dispositivo_uuid)
-         VALUES (?,?,?,?, 'PENDIENTE', ?,?,?,?,?)`,
+         VALUES (?,?,?,?, 'PENDIENTE', ?, 'ORIGEN', ?,?,?,?)`,
         [
           uuid,
           numero,
           origen.id,
           destino.id,
-          quienConfirma(ctx.rol),
+          directo ? 'DIRECTO' : 'SOLICITUD',
           p.notas ?? null,
           ctx.usuarioId ?? null,
           fecha,
@@ -133,44 +150,75 @@ export async function crearTraslado(conn, p, ctx) {
   }
 
   await evento(conn, trasladoId, 'CREADO', ctx, p.notas ?? null);
-  return { uuid, numero, estado: 'PENDIENTE' };
+
+  if (directo) {
+    // Nace despachado: misma transacción, mismas comprobaciones de stock.
+    const t = await bloquearTraslado(conn, uuid);
+    const r = await despachar(conn, t, p, ctx, 'Movimiento directo');
+    return { ...r, tipo: 'DIRECTO' };
+  }
+  return { uuid, numero, estado: 'PENDIENTE', tipo: 'SOLICITUD' };
 }
 
 export async function aprobarTraslado(conn, p, ctx) {
   const t = await bloquearTraslado(conn, p.uuid);
-  // Reenvío de la misma aprobación: idempotente.
+  // Reenvío del mismo despacho: idempotente.
   if (t.estado === 'APROBADO' && Number(t.resuelto_por) === Number(ctx.usuarioId)) {
     return { uuid: t.uuid, estado: t.estado, duplicado: true };
   }
-  const motivo = puedeResolver(t, usuarioDe(ctx));
+  const motivo = puedeDespachar(t, usuarioDe(ctx));
   if (motivo) {
     throw t.estado !== 'PENDIENTE'
       ? conflict('TRASLADO_YA_RESUELTO', `El traslado ${t.numero} ya está ${t.estado.toLowerCase()}`)
       : forbidden(motivo, 'SIN_PERMISO');
   }
+  return despachar(conn, t, p, ctx, null);
+}
 
+/**
+ * Mueve el stock de un traslado bloqueado y lo marca despachado.
+ *
+ * `p.movimientos` trae, por línea, los uuid de los dos movimientos (los genera
+ * el teléfono para que su copia y la del servidor sean la MISMA fila) y,
+ * opcionalmente, `cantidad`: lo que de verdad sale. Sin cantidad sale lo
+ * pedido, que es como despachan los teléfonos anteriores a esta versión.
+ */
+async function despachar(conn, t, p, ctx, nota) {
   const detalles = await txQuery(
     conn,
-    `SELECT d.uuid, d.cantidad, d.descripcion, p.uuid AS producto_uuid
+    `SELECT d.id, d.uuid, d.cantidad, d.descripcion, p.uuid AS producto_uuid
        FROM traslado_detalles d JOIN productos p ON p.id = d.producto_id
       WHERE d.traslado_id = ?`,
     [t.id],
   );
+  const delCliente = new Map((p.movimientos ?? []).map((m) => [m.detalle_uuid, m]));
+  const enviadas = new Map();
+  for (const [detalleUuid, m] of delCliente) {
+    if (m.cantidad != null) enviadas.set(detalleUuid, toQty(m.cantidad));
+  }
+  const reparto = repartoDeDespacho(
+    detalles.map((d) => ({ uuid: d.uuid, cantidad: toQty(d.cantidad) })),
+    enviadas,
+  );
+  if (reparto.error) throw badRequest('TRASLADO_SIN_UNIDADES', reparto.error);
+  const enviadaDe = new Map(reparto.lineas.map((l) => [l.uuid, l.enviada]));
+
   const productos = await bloquearProductos(conn, detalles.map((d) => d.producto_uuid));
 
   // Con los productos bloqueados, el stock de origen no puede cambiar mientras
-  // se comprueba. No se traslada lo que no hay: a diferencia de una venta
-  // sin conexión, esto se puede rechazar sin descuadrar nada.
+  // se comprueba. No se envía lo que no hay: a diferencia de una venta sin
+  // conexión, esto se puede rechazar sin descuadrar nada.
   const faltantes = [];
-  const pedidoPorProducto = new Map();
+  const porProducto = new Map();
   for (const d of detalles) {
-    pedidoPorProducto.set(d.producto_uuid, (pedidoPorProducto.get(d.producto_uuid) ?? 0n) + toQty(d.cantidad));
+    porProducto.set(d.producto_uuid, (porProducto.get(d.producto_uuid) ?? 0n) + enviadaDe.get(d.uuid));
   }
-  for (const [productoUuid, pedido] of pedidoPorProducto) {
+  for (const [productoUuid, enviar] of porProducto) {
+    if (enviar <= 0n) continue;
     const producto = productos.get(productoUuid);
     const disponible = toQty(await stockEnSede(conn, producto.id, t.sede_origen_id));
-    if (disponible < pedido) {
-      faltantes.push(`${producto.nombre}: hay ${fromQty(disponible)}, se piden ${fromQty(pedido)}`);
+    if (disponible < enviar) {
+      faltantes.push(`${producto.nombre}: hay ${fromQty(disponible)}, se envían ${fromQty(enviar)}`);
     }
   }
   if (faltantes.length) {
@@ -180,21 +228,23 @@ export async function aprobarTraslado(conn, p, ctx) {
     );
   }
 
-  // Los uuid de movimiento los genera el dispositivo que aprueba, para que su
-  // copia local y la del servidor sean la MISMA fila (si no, el kardex del
-  // teléfono mostraría el traslado dos veces).
-  const uuidsCliente = new Map((p.movimientos ?? []).map((m) => [m.detalle_uuid, m]));
   const fecha = p.fecha ? new Date(p.fecha) : new Date();
   for (const d of detalles) {
+    const enviada = enviadaDe.get(d.uuid);
+    await txExecute(conn, 'UPDATE traslado_detalles SET cantidad_enviada = ? WHERE id = ?', [
+      fromQty(enviada),
+      d.id,
+    ]);
+    if (enviada <= 0n) continue;
     const producto = productos.get(d.producto_uuid);
-    const uuids = uuidsCliente.get(d.uuid) ?? {};
+    const uuids = delCliente.get(d.uuid) ?? {};
     await insertarMovimiento(
       conn,
       producto,
       {
         uuid: uuids.salida_uuid,
         tipo: 'TRASLADO',
-        cantidad: fromQty(-toQty(d.cantidad)),
+        cantidad: fromQty(-enviada),
         sede_id: t.sede_origen_id,
         traslado_id: t.id,
         motivo: `Traslado ${t.numero} a ${t.destino}`,
@@ -209,7 +259,7 @@ export async function aprobarTraslado(conn, p, ctx) {
       {
         uuid: uuids.entrada_uuid,
         tipo: 'TRASLADO',
-        cantidad: d.cantidad,
+        cantidad: fromQty(enviada),
         sede_id: t.sede_destino_id,
         traslado_id: t.id,
         motivo: `Traslado ${t.numero} desde ${t.origen}`,
@@ -225,7 +275,8 @@ export async function aprobarTraslado(conn, p, ctx) {
     "UPDATE traslados SET estado = 'APROBADO', resuelto_por = ?, resuelto_en = ? WHERE id = ?",
     [ctx.usuarioId, fecha, t.id],
   );
-  await evento(conn, t.id, 'APROBADO', ctx);
+  const parcial = reparto.lineas.some((l) => l.enviada !== l.pedida);
+  await evento(conn, t.id, 'APROBADO', ctx, nota ?? (parcial ? 'Despacho parcial' : null));
   await registrarAuditoria(conn, {
     usuarioId: ctx.usuarioId,
     sedeId: t.sede_origen_id,
@@ -237,10 +288,15 @@ export async function aprobarTraslado(conn, p, ctx) {
       numero: t.numero,
       origen: t.origen,
       destino: t.destino,
-      productos: detalles.map((d) => ({ producto: d.descripcion, cantidad: d.cantidad })),
+      directo: nota === 'Movimiento directo',
+      productos: detalles.map((d) => ({
+        producto: d.descripcion,
+        pedida: d.cantidad,
+        enviada: fromQty(enviadaDe.get(d.uuid)),
+      })),
     },
   });
-  return { uuid: t.uuid, numero: t.numero, estado: 'APROBADO' };
+  return { uuid: t.uuid, numero: t.numero, estado: 'APROBADO', parcial };
 }
 
 export async function rechazarTraslado(conn, p, ctx) {
@@ -248,7 +304,7 @@ export async function rechazarTraslado(conn, p, ctx) {
   if (t.estado === 'RECHAZADO' && Number(t.resuelto_por) === Number(ctx.usuarioId)) {
     return { uuid: t.uuid, estado: t.estado, duplicado: true };
   }
-  const motivo = puedeResolver(t, usuarioDe(ctx));
+  const motivo = puedeDespachar(t, usuarioDe(ctx));
   if (motivo) {
     throw t.estado !== 'PENDIENTE'
       ? conflict('TRASLADO_YA_RESUELTO', `El traslado ${t.numero} ya está ${t.estado.toLowerCase()}`)

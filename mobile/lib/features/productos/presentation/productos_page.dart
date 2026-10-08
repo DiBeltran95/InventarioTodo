@@ -86,6 +86,11 @@ class _ProductosPageState extends ConsumerState<ProductosPage> {
                   Expanded(child: Text('Productos', style: context.textos.headlineSmall)),
                   const SyncChip(compacto: true),
                   IconButton(
+                    onPressed: () => context.push(Rutas.disponibilidad),
+                    icon: const Icon(Icons.travel_explore_rounded),
+                    tooltip: '¿Dónde hay? Existencias en todas las sedes',
+                  ),
+                  IconButton(
                     onPressed: () => context.push('${Rutas.escanear}?modo=consulta'),
                     icon: const Icon(Icons.qr_code_scanner_rounded),
                     tooltip: 'Buscar escaneando',

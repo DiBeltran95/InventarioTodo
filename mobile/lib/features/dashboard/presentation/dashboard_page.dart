@@ -698,12 +698,14 @@ class _AccesosRapidos extends StatelessWidget {
         );
 
     final accesos = <Widget>[
+      acceso(Icons.travel_explore_rounded, '¿Dónde hay un producto?', Rutas.disponibilidad,
+          subtitulo: 'Cuántas unidades hay en cada sede y a qué precio'),
       acceso(Icons.qr_code_scanner_rounded, 'Consultar un producto', '${Rutas.escanear}?modo=consulta',
           subtitulo: 'Escanear para ver precio y existencias'),
       if (rol.puedeVender && !rol.esGestor) acceso(Icons.receipt_long_outlined, 'Mis ventas de hoy', Rutas.ventas, ir: true),
       if (rol.puedeVender) acceso(Icons.point_of_sale_rounded, 'Mi caja', Rutas.caja),
       if (rol.puedeRegistrarEntradas) acceso(Icons.swap_vert_rounded, 'Movimientos de inventario', Rutas.movimientos),
-      if (rol.pideTraslados) acceso(Icons.local_shipping_outlined, 'Traslados entre sedes', Rutas.traslados),
+      if (rol.veTraslados) acceso(Icons.local_shipping_outlined, 'Traslados entre sedes', Rutas.traslados),
       if (rol.puedeRegistrarEntradas) acceso(Icons.warning_amber_rounded, 'Stock bajo por sede', Rutas.stockBajo),
       if (rol.esGestor) ...[
         acceso(Icons.fact_check_outlined, 'Ajustes de inventario', Rutas.solicitudesAjuste),

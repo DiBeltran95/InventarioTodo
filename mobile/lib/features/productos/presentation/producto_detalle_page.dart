@@ -9,14 +9,13 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/config/app_config.dart';
 import '../../../core/database/daos/productos_dao.dart';
-import '../../../core/database/daos/sedes_dao.dart';
 import '../../../core/money/money.dart';
 import '../../../core/providers/providers.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/estados.dart';
-import '../../auth/domain/sesion.dart';
 import '../../auth/presentation/auth_providers.dart';
+import '../../disponibilidad/presentation/disponibilidad_widgets.dart';
 import '../../inventario/presentation/inventario_providers.dart';
 import '../../inventario/presentation/solicitudes_ajuste_page.dart';
 import '../../ventas/presentation/carrito_provider.dart';
@@ -203,7 +202,10 @@ class _Contenido extends ConsumerWidget {
             ),
           ).animate().fadeIn(duration: 260.ms).slideY(begin: 0.06),
 
-          _StockPorSede(item: item, sedeActivaUuid: sedeActiva?.uuid, rol: rol),
+          // En qué sedes hay, cuánto y a qué precio; con «Solicitar» para el
+          // gerente y «Mover» para el director o el auxiliar.
+          const SizedBox(height: 12),
+          DisponibilidadProducto(item: item),
 
           const SizedBox(height: 16),
 
@@ -794,72 +796,6 @@ class _UltimosMovimientos extends ConsumerWidget {
             ),
           const SizedBox(height: 8),
         ],
-      ),
-    );
-  }
-}
-
-final _stockPorSedeProvider = StreamProvider.autoDispose.family<List<StockEnSede>, String>(
-  (ref, uuid) => ref.watch(sedesDaoProvider).observarStockPorSede(uuid),
-);
-
-/// Cuánto hay en cada sede visible. Sólo aparece con dos o más sedes: con una,
-/// repetiría la tarjeta de arriba. Desde aquí se pide el traslado hacia la sede
-/// activa, que es justo cuando uno descubre que en otra sede sí hay.
-class _StockPorSede extends ConsumerWidget {
-  const _StockPorSede({required this.item, required this.sedeActivaUuid, required this.rol});
-
-  final ProductoConCategoria item;
-  final String? sedeActivaUuid;
-  final RolUsuario rol;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final lista = ref.watch(_stockPorSedeProvider(item.uuid)).value ?? const <StockEnSede>[];
-    if (lista.length < 2) return const SizedBox.shrink();
-    final otraConStock = lista.any((s) => s.sede.uuid != sedeActivaUuid && s.stock.milesimas > 0);
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Card(
-        child: Column(
-          children: [
-            ListTile(
-              title: Text('Por sede', style: context.textos.titleSmall),
-              trailing: rol.pideTraslados && otraConStock && sedeActivaUuid != null
-                  ? TextButton.icon(
-                      onPressed: () => context.push(
-                        '${Rutas.trasladoNuevo}?producto=${item.uuid}&destino=$sedeActivaUuid',
-                      ),
-                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
-                      label: const Text('Pedir traslado'),
-                    )
-                  : null,
-            ),
-            for (final s in lista)
-              ListTile(
-                dense: true,
-                leading: Icon(
-                  s.sede.uuid == sedeActivaUuid ? Icons.location_on_rounded : Icons.storefront_outlined,
-                  size: 20,
-                  color: s.sede.uuid == sedeActivaUuid ? context.colores.primary : null,
-                ),
-                title: Text(s.sede.nombre),
-                subtitle: s.minimo == null ? null : Text('Mínimo ${s.minimo!.format()}'),
-                trailing: Text(
-                  s.stock.formatConUnidad(item.producto.unidadMedida),
-                  style: context.textos.titleSmall?.copyWith(
-                    color: s.stock.milesimas <= 0
-                        ? context.dominio.peligro
-                        : s.minimo != null && s.stock.milesimas <= s.minimo!.milesimas
-                            ? context.dominio.advertencia
-                            : null,
-                  ),
-                ),
-              ),
-            const SizedBox(height: 6),
-          ],
-        ),
       ),
     );
   }

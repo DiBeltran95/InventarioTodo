@@ -7,7 +7,13 @@ import {
   puedeAdministrar,
   validarSedesDeRol,
 } from '../src/domain/alcance.js';
-import { quienConfirma, puedeCrear, puedeResolver, puedeCancelar } from '../src/domain/traslados.js';
+import {
+  puedeSolicitar,
+  puedeMover,
+  puedeDespachar,
+  puedeCancelar,
+  repartoDeDespacho,
+} from '../src/domain/traslados.js';
 import { calcularEsperado, compararConteo, aplicarRecaudo } from '../src/domain/caja.js';
 
 // Sedes: 1 = principal, 2 = norte, 3 = sur.
@@ -17,6 +23,7 @@ const gerenteVarias = { id: 3, rol: 'GERENTE', alcance: { esDirector: false, sed
 const vendedorNorte = { id: 4, rol: 'VENDEDOR', alcance: { esDirector: false, sedeIds: [2] } };
 const vendedorSur = { id: 5, rol: 'VENDEDOR', alcance: { esDirector: false, sedeIds: [3] } };
 const auxNorte = { id: 6, rol: 'AUXILIAR_INVENTARIO', alcance: { esDirector: false, sedeIds: [2] } };
+const auxSur = { id: 7, rol: 'AUXILIAR_INVENTARIO', alcance: { esDirector: false, sedeIds: [3] } };
 
 // ── Alcance ─────────────────────────────────────────────────────────────────
 
@@ -63,45 +70,63 @@ test('cada rol tiene el número de sedes que le corresponde', () => {
 
 // ── Traslados ───────────────────────────────────────────────────────────────
 
-test('si lo pide un empleado lo aprueba un gestor; si lo pide un gestor, la sede origen', () => {
-  assert.equal(quienConfirma('VENDEDOR'), 'GESTOR');
-  assert.equal(quienConfirma('GERENTE'), 'ORIGEN');
-  assert.equal(quienConfirma('ADMIN'), 'ORIGEN');
+test('el gerente solicita unidades PARA una sede suya y desde otra', () => {
+  assert.equal(puedeSolicitar(gerenteNorte, 3, 2), null, 'de Sur para Norte');
+  assert.equal(puedeSolicitar(gerenteVarias, 2, 3), null, 'entre dos sedes suyas también');
+  assert.match(puedeSolicitar(gerenteNorte, 2, 3), /para una sede tuya/, 'no pide para otra sede');
+  assert.match(puedeSolicitar(gerenteNorte, 2, 2), /distintas/);
 });
 
-test('se pide desde o hacia una sede propia; el auxiliar no pide traslados', () => {
-  assert.equal(puedeCrear(vendedorNorte, 2, 3), null, 'enviar desde la suya');
-  assert.equal(puedeCrear(vendedorNorte, 3, 2), null, 'pedir para la suya');
-  assert.match(puedeCrear(vendedorNorte, 1, 3), /desde o hacia una sede tuya/);
-  assert.match(puedeCrear(vendedorNorte, 2, 2), /distintas/);
-  assert.match(puedeCrear(auxNorte, 2, 3), /no puede pedir/);
+test('el vendedor sólo consulta; el director y el auxiliar no solicitan, mueven', () => {
+  assert.match(puedeSolicitar(vendedorNorte, 3, 2), /Sólo un gerente/);
+  assert.match(puedeSolicitar(director, 3, 2), /directamente/);
+  assert.match(puedeSolicitar(auxNorte, 3, 2), /directamente/);
 });
 
-test('un traslado pedido por un vendedor lo aprueba el gerente de la sede origen, no otro vendedor', () => {
-  const t = { estado: 'PENDIENTE', confirma: 'GESTOR', sede_origen_id: 2, solicitado_por: vendedorNorte.id };
-  assert.equal(puedeResolver(t, gerenteNorte), null);
-  assert.equal(puedeResolver(t, director), null);
-  assert.match(puedeResolver(t, { ...vendedorNorte, id: 99 }), /lo aprueba el gerente/);
-  assert.match(puedeResolver(t, vendedorSur), /sede de origen/);
+test('mueve unidades el director entre cualesquiera sedes, y el auxiliar desde la suya', () => {
+  assert.equal(puedeMover(director, 1, 3), null);
+  assert.equal(puedeMover(auxNorte, 2, 3), null, 'desde su sede');
+  assert.match(puedeMover(auxNorte, 3, 2), /desde tu sede/, 'no saca de otra sede');
+  assert.match(puedeMover(gerenteNorte, 2, 3), /Director General o el auxiliar/, 'el gerente solicita');
+  assert.match(puedeMover(vendedorNorte, 2, 3), /Director General o el auxiliar/);
+  assert.match(puedeMover(director, 2, 2), /distintas/);
 });
 
-test('un traslado pedido por un gerente lo confirma alguien de la sede origen', () => {
-  const t = { estado: 'PENDIENTE', confirma: 'ORIGEN', sede_origen_id: 3, solicitado_por: gerenteNorte.id };
-  assert.equal(puedeResolver(t, vendedorSur), null);
-  assert.match(puedeResolver(t, vendedorNorte), /sede de origen/);
+test('despacha la solicitud el auxiliar de la sede origen o el director', () => {
+  const t = { estado: 'PENDIENTE', sede_origen_id: 3, solicitado_por: gerenteNorte.id };
+  assert.equal(puedeDespachar(t, auxSur), null);
+  assert.equal(puedeDespachar(t, director), null);
+  assert.match(puedeDespachar(t, auxNorte), /de la sede de origen/, 'auxiliar de otra sede');
+  assert.match(puedeDespachar(t, gerenteVarias), /de la sede de origen/, 'ni el gerente de la sede origen');
+  assert.match(puedeDespachar(t, vendedorSur), /de la sede de origen/);
+  assert.match(puedeDespachar({ ...t, estado: 'APROBADO' }, director), /ya fue resuelto/);
 });
 
-test('nadie confirma su propio traslado, ni uno ya resuelto', () => {
-  const t = { estado: 'PENDIENTE', confirma: 'ORIGEN', sede_origen_id: 2, solicitado_por: gerenteNorte.id };
-  assert.match(puedeResolver(t, gerenteNorte), /otra persona/);
-  assert.match(puedeResolver({ ...t, estado: 'APROBADO' }, vendedorNorte), /ya fue resuelto/);
-});
-
-test('cancela quien lo pidió o el director', () => {
-  const t = { estado: 'PENDIENTE', solicitado_por: vendedorNorte.id };
-  assert.equal(puedeCancelar(t, vendedorNorte), null);
+test('cancela quien lo pidió o el director, mientras esté pendiente', () => {
+  const t = { estado: 'PENDIENTE', solicitado_por: gerenteNorte.id };
+  assert.equal(puedeCancelar(t, gerenteNorte), null);
   assert.equal(puedeCancelar(t, director), null);
-  assert.match(puedeCancelar(t, gerenteNorte), /quien lo pidió/);
+  assert.match(puedeCancelar(t, auxSur), /quien lo pidió/);
+  assert.match(puedeCancelar({ ...t, estado: 'RECHAZADO' }, gerenteNorte), /ya fue resuelto/);
+});
+
+test('al despachar se pueden enviar menos unidades, o ninguna de una línea, pero algo', () => {
+  const detalles = [
+    { uuid: 'a', cantidad: 5000n },
+    { uuid: 'b', cantidad: 2000n },
+  ];
+  // Sin indicar nada: sale todo lo pedido (teléfonos anteriores).
+  assert.deepEqual(repartoDeDespacho(detalles, new Map()).total, 7000n);
+
+  const parcial = repartoDeDespacho(detalles, new Map([['a', 3000n], ['b', 0n]]));
+  assert.equal(parcial.total, 3000n);
+  assert.deepEqual(parcial.lineas.map((l) => [l.uuid, l.pedida, l.enviada]), [
+    ['a', 5000n, 3000n],
+    ['b', 2000n, 0n],
+  ]);
+
+  assert.match(repartoDeDespacho(detalles, new Map([['a', 0n], ['b', 0n]])).error, /recházalo/);
+  assert.match(repartoDeDespacho(detalles, new Map([['a', -1n]])).error, /negativa/);
 });
 
 // ── Cierre de caja ──────────────────────────────────────────────────────────
