@@ -69,10 +69,33 @@ class SesionNotifier extends AsyncNotifier<Sesion?> {
     state = const AsyncValue.data(null);
   }
 
-  Future<ResultadoLogin> iniciarSesion(String email, String password) async {
+  Future<ResultadoLogin> iniciarSesion(String email, String password) =>
+      _abrir(() => ref.read(authRepositoryProvider).iniciarSesion(email, password));
+
+  /// Crea la empresa y entra como su director: mismo camino que un login.
+  Future<ResultadoLogin> registrarEmpresa({
+    required String empresa,
+    String? nit,
+    String? telefono,
+    required String sede,
+    required String nombre,
+    required String email,
+    required String password,
+  }) =>
+      _abrir(() => ref.read(authRepositoryProvider).registrarEmpresa(
+            empresa: empresa,
+            nit: nit,
+            telefono: telefono,
+            sede: sede,
+            nombre: nombre,
+            email: email,
+            password: password,
+          ));
+
+  Future<ResultadoLogin> _abrir(Future<ResultadoLogin> Function() autenticar) async {
     state = const AsyncValue.loading();
     try {
-      final resultado = await ref.read(authRepositoryProvider).iniciarSesion(email, password);
+      final resultado = await autenticar();
 
       if (!resultado.exito) {
         state = AsyncValue.data(null);

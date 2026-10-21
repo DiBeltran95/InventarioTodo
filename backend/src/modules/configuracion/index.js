@@ -39,10 +39,23 @@ function tipar(filas) {
   return salida;
 }
 
+/** Configuración de la empresa (una fila por clave en empresa_configuracion). */
+const leerConfiguracion = (empresaId) =>
+  query('SELECT clave, valor, tipo, descripcion FROM empresa_configuracion WHERE empresa_id = ?', [
+    empresaId,
+  ]);
+
+/**
+ * Claves que también viven en `empresas`: el nombre, el NIT y el teléfono son
+ * los de la empresa en TODA la plataforma (Control de Personal y el panel los
+ * leen de ahí). Cambiarlos aquí los cambia allá.
+ */
+const CLAVES_DE_EMPRESA = { nombre_negocio: 'nombre', nit: 'nit', telefono: 'telefono' };
+
 router.get(
   '/',
-  asyncHandler(async (_req, res) => {
-    const filas = await query('SELECT clave, valor, tipo, descripcion FROM configuracion');
+  asyncHandler(async (req, res) => {
+    const filas = await leerConfiguracion(req.empresaId);
     ok(res, {
       valores: { ...CONFIG_DEFAULTS, ...tipar(filas) },
       // La app necesita estos tres para operar sin conexión de forma coherente
@@ -75,13 +88,20 @@ router.put(
           typeof valor === 'boolean' ? 'BOOL' : typeof valor === 'number' ? 'INT' : 'STRING';
         await txExecute(
           conn,
-          `INSERT INTO configuracion (clave, valor, tipo) VALUES (?,?,?)
+          `INSERT INTO empresa_configuracion (empresa_id, clave, valor, tipo) VALUES (?,?,?,?)
            ON DUPLICATE KEY UPDATE valor = VALUES(valor), tipo = VALUES(tipo)`,
-          [clave, String(valor), tipo],
+          [req.empresaId, clave, String(valor), tipo],
         );
+        const columna = CLAVES_DE_EMPRESA[clave];
+        if (columna && !(columna === 'nombre' && !String(valor).trim())) {
+          await txExecute(conn, `UPDATE empresas SET ${columna} = ? WHERE id = ?`, [
+            String(valor).trim() || null,
+            req.empresaId,
+          ]);
+        }
       }
     });
-    const filas = await query('SELECT clave, valor, tipo FROM configuracion');
+    const filas = await leerConfiguracion(req.empresaId);
     ok(res, { valores: tipar(filas), actualizadas: entradas.length });
   }),
 );

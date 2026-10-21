@@ -11,6 +11,9 @@ import '../../features/auth/presentation/login_page.dart';
 import '../../features/auth/presentation/usuarios_page.dart';
 import '../../features/caja/presentation/caja_page.dart';
 import '../../features/categorias/presentation/categorias_page.dart';
+import '../../features/cuenta/presentation/mi_empresa_page.dart';
+import '../../features/cuenta/presentation/recuperar_clave_page.dart';
+import '../../features/cuenta/presentation/registro_empresa_page.dart';
 import '../../features/cuentas/presentation/cuentas_por_cobrar_page.dart';
 import '../../features/dashboard/presentation/dashboard_page.dart';
 import '../../features/disponibilidad/presentation/disponibilidad_page.dart';
@@ -47,6 +50,12 @@ class Rutas {
   const Rutas._();
 
   static const login = '/login';
+  static const registro = '/registro';
+  static const recuperarClave = '/recuperar-clave';
+  static const miEmpresa = '/mi-empresa';
+
+  /// Se abren sin sesión. Con sesión, cualquiera de ellas lleva al inicio.
+  static const publicas = {login, registro, recuperarClave};
   static const dashboard = '/';
   static const productos = '/productos';
   static const ventas = '/ventas';
@@ -215,10 +224,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (sesion.isLoading) return null;
 
       final autenticado = sesion.value != null;
-      final enLogin = estado.matchedLocation == Rutas.login;
+      final enPublica = Rutas.publicas.contains(estado.matchedLocation);
 
-      if (!autenticado && !enLogin) return Rutas.login;
-      if (autenticado && enLogin) return Rutas.dashboard;
+      if (!autenticado && !enPublica) return Rutas.login;
+      if (autenticado && enPublica) return Rutas.dashboard;
 
       // Barrera de rol en el enrutador.
       //
@@ -236,6 +245,19 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: Rutas.login,
         builder: (context, estado) => const LoginPage(),
+      ),
+      GoRoute(
+        path: Rutas.registro,
+        builder: (context, estado) => const RegistroEmpresaPage(),
+      ),
+      GoRoute(
+        path: Rutas.recuperarClave,
+        builder: (context, estado) => RecuperarClavePage(email: estado.uri.queryParameters['email']),
+      ),
+      GoRoute(
+        path: Rutas.miEmpresa,
+        parentNavigatorKey: _navegadorRaiz,
+        builder: (context, estado) => const MiEmpresaPage(),
       ),
 
       // Escáner y carrito van fuera del shell: ocupan la pantalla completa

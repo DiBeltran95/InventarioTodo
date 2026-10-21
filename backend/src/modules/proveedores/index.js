@@ -36,7 +36,7 @@ router.get(
   '/',
   validar({ query: z.object({ buscar: z.string().max(100).optional() }) }),
   asyncHandler(async (req, res) => {
-    const items = await repoProveedores.listar({ buscar: req.validated.query.buscar });
+    const items = await repoProveedores.listar(req.empresaId, { buscar: req.validated.query.buscar });
     lista(res, items, { total: items.length });
   }),
 );
@@ -44,7 +44,7 @@ router.get(
 router.get(
   '/:uuid',
   validar({ params: paramUuid }),
-  asyncHandler(async (req, res) => ok(res, await repoProveedores.obtener(req.params.uuid))),
+  asyncHandler(async (req, res) => ok(res, await repoProveedores.obtener(req.empresaId, req.params.uuid))),
 );
 
 router.post(
@@ -52,7 +52,7 @@ router.post(
   soloGestor,
   validar({ body: cuerpoCrear }),
   asyncHandler(async (req, res) =>
-    creado(res, await withTransaction((c) => repoProveedores.crear(c, req.body))),
+    creado(res, await withTransaction((c) => repoProveedores.crear(c, req.empresaId, req.body))),
   ),
 );
 
@@ -61,7 +61,7 @@ router.patch(
   soloGestor,
   validar({ params: paramUuid, body: cuerpoActualizar }),
   asyncHandler(async (req, res) =>
-    ok(res, await withTransaction((c) => repoProveedores.actualizar(c, req.params.uuid, req.body))),
+    ok(res, await withTransaction((c) => repoProveedores.actualizar(c, req.empresaId, req.params.uuid, req.body))),
   ),
 );
 
@@ -70,7 +70,7 @@ router.delete(
   soloGestor,
   validar({ params: paramUuid }),
   asyncHandler(async (req, res) =>
-    ok(res, await withTransaction((c) => repoProveedores.eliminar(c, req.params.uuid))),
+    ok(res, await withTransaction((c) => repoProveedores.eliminar(c, req.empresaId, req.params.uuid))),
   ),
 );
 

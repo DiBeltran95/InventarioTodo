@@ -9,7 +9,7 @@ import { logger } from '../../utils/logger.js';
 import { GRACIA_CIERRE_TURNO_MIN } from '../../config/constants.js';
 import { evaluarJornada, permitidoConGracia, jornadaDe, leerHorario } from '../../domain/jornada.js';
 import { veSede } from '../../domain/alcance.js';
-import { fueraDeHorario } from '../../middleware/auth.js';
+import { fueraDeHorario, exigirAccesoInventario } from '../../middleware/auth.js';
 import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
 import {
   cargarAlcance,
@@ -141,6 +141,7 @@ export function perfilPublico(u) {
     nombre: u.nombre,
     email: u.email,
     rol: u.rol,
+    rol_asistencia: u.rol_asistencia ?? null,
     activo: !!u.activo,
     restringir_horario: !!u.restringir_horario,
     horario: leerHorario(u.horario),
@@ -148,8 +149,22 @@ export function perfilPublico(u) {
   };
 }
 
-const COLUMNAS_USUARIO =
-  'id, uuid, nombre, email, password_hash, rol, activo, restringir_horario, horario, acceso_extra_hasta';
+/**
+ * Cuenta + su empresa + el permiso de la empresa sobre Inventario, que
+ * `exigirAccesoInventario` revisa (cuenta, empresa, app y rol).
+ */
+const SELECT_USUARIO = `
+  SELECT u.id, u.uuid, u.empresa_id, u.nombre, u.email, u.password_hash, u.rol, u.rol_asistencia,
+         u.activo, u.restringir_horario, u.horario, u.acceso_extra_hasta,
+         e.uuid AS empresa_uuid, e.nombre AS empresa_nombre,
+         e.estado AS empresa_estado, e.deleted_at AS empresa_borrada,
+         ea.activo AS app_habilitada
+    FROM usuarios u
+    LEFT JOIN empresas e ON e.id = u.empresa_id
+    LEFT JOIN empresa_aplicativos ea ON ea.empresa_id = u.empresa_id AND ea.aplicativo = 'INVENTARIO'`;
+
+/** Empresa tal como la ve la app (sin ids internos). */
+const empresaPublica = (u) => ({ uuid: u.empresa_uuid, nombre: u.empresa_nombre });
 
 /** Estado de la jornada tal como lo necesita la app para operar sin red. */
 export function jornadaPublica(usuario, ahora = new Date()) {
@@ -171,21 +186,21 @@ export function jornadaPublica(usuario, ahora = new Date()) {
  */
 async function resolverSedeActiva(alcance, sedeUuid, conn = null) {
   if (sedeUuid) {
-    const sede = await sedePorUuid(conn, sedeUuid);
+    const sede = await sedePorUuid(conn, sedeUuid, alcance.empresaId);
     if (!sede || !sede.activo) throw notFound('Sede');
     if (!veSede(alcance, sede.id)) {
       throw forbidden('No puedes operar en esa sede', 'SEDE_FUERA_DE_ALCANCE');
     }
     return sede;
   }
-  if (alcance.esDirector) return sedePrincipal(conn);
+  if (alcance.esDirector) return sedePrincipal(conn, alcance.empresaId);
   const sedes = await sedesDeAlcance(alcance, conn);
   return sedes.find((s) => s.activo) ?? null;
 }
 
 export async function login({ email, password, dispositivo, sede_uuid: sedeUuid }, userAgent) {
   const usuario = await queryOne(
-    `SELECT ${COLUMNAS_USUARIO} FROM usuarios WHERE email = ? AND deleted_at IS NULL`,
+    `${SELECT_USUARIO} WHERE u.email = ? AND u.deleted_at IS NULL AND u.es_superadmin = 0`,
     [email],
   );
 
@@ -195,7 +210,9 @@ export async function login({ email, password, dispositivo, sede_uuid: sedeUuid 
   const valida = await verificarPassword(usuario?.password_hash ?? hashSenuelo, password);
 
   if (!usuario || !valida) throw unauthorized('Correo o contraseña incorrectos', 'CREDENCIALES_INVALIDAS');
-  if (!usuario.activo) throw unauthorized('La cuenta está desactivada', 'CUENTA_DESACTIVADA');
+  // Con la contraseña ya verificada sí se dice por qué no entra: es la misma
+  // persona, y saber que su empresa no tiene la app le ahorra una llamada.
+  exigirAccesoInventario(usuario);
 
   const alcance = await cargarAlcance(usuario);
 
@@ -243,6 +260,7 @@ export async function login({ email, password, dispositivo, sede_uuid: sedeUuid 
       refresh_token: refreshToken,
       refresh_expira: expira.toISOString(),
       usuario: perfilPublico(usuario),
+      empresa: empresaPublica(usuario),
       dispositivo: dispositivo ? { uuid: dispositivo.uuid, prefijo_folio: prefijoFolio } : null,
       sedes: (await sedesDeAlcance(alcance, conn)).map(sedePublica),
       sede_activa: sedeActiva.uuid,
@@ -271,12 +289,15 @@ export async function cambiarSedeActiva(alcance, dispositivoUuid, sedeUuid) {
 export async function perfil(usuario, alcance, dispositivoUuid) {
   const sedeDispositivo = dispositivoUuid
     ? await queryOne(
-        'SELECT s.uuid FROM dispositivos d JOIN sedes s ON s.id = d.sede_id WHERE d.uuid = ?',
-        [dispositivoUuid],
+        `SELECT s.uuid FROM dispositivos d JOIN sedes s ON s.id = d.sede_id
+          WHERE d.uuid = ? AND s.empresa_id = ?`,
+        [dispositivoUuid, alcance.empresaId],
       )
     : null;
+  const empresa = await queryOne('SELECT uuid, nombre FROM empresas WHERE id = ?', [alcance.empresaId]);
   return {
     usuario: perfilPublico(usuario),
+    empresa,
     sedes: (await sedesDeAlcance(alcance)).map(sedePublica),
     sede_activa: sedeDispositivo?.uuid ?? null,
     jornada: jornadaPublica(usuario),
@@ -310,10 +331,14 @@ export async function refrescar({ refresh_token: recibido, dispositivo }, userAg
       const fila = await txQueryOne(
         conn,
         `SELECT rt.id, rt.usuario_id, rt.familia, rt.expires_at, rt.revoked_at,
-                u.uuid, u.nombre, u.email, u.rol, u.activo,
-                u.restringir_horario, u.horario, u.acceso_extra_hasta
+                u.uuid, u.empresa_id, u.nombre, u.email, u.rol, u.rol_asistencia, u.activo,
+                u.restringir_horario, u.horario, u.acceso_extra_hasta,
+                e.estado AS empresa_estado, e.deleted_at AS empresa_borrada,
+                ea.activo AS app_habilitada
            FROM refresh_tokens rt
            JOIN usuarios u ON u.id = rt.usuario_id
+           LEFT JOIN empresas e ON e.id = u.empresa_id
+           LEFT JOIN empresa_aplicativos ea ON ea.empresa_id = u.empresa_id AND ea.aplicativo = 'INVENTARIO'
           WHERE rt.token_hash = ?
           FOR UPDATE`,
         [hash],
@@ -329,7 +354,7 @@ export async function refrescar({ refresh_token: recibido, dispositivo }, userAg
       if (new Date(fila.expires_at).getTime() < Date.now()) {
         throw unauthorized('El refresh token expiró', 'REFRESH_EXPIRADO');
       }
-      if (!fila.activo) throw unauthorized('La cuenta está desactivada', 'CUENTA_DESACTIVADA');
+      exigirAccesoInventario(fila);
 
       // Con gracia: el último envío tras el fin del turno puede necesitar un
       // token nuevo. Pasado ese margen, la sesión no se renueva.

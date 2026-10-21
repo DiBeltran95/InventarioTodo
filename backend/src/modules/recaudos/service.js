@@ -26,13 +26,18 @@ export async function crearRecaudo(conn, p, ctx) {
     throw forbidden('Los recaudos los registra el gerente o el director', 'SIN_PERMISO');
   }
   const uuid = p.uuid ?? nuevoUuid();
-  const existente = await txQueryOne(conn, 'SELECT uuid FROM recaudos WHERE uuid = ?', [uuid]);
+  const existente = await txQueryOne(
+    conn,
+    `SELECT r.uuid FROM recaudos r JOIN metodos_pago mp ON mp.id = r.metodo_pago_id
+      WHERE r.uuid = ? AND mp.empresa_id = ?`,
+    [uuid, ctx.empresaId],
+  );
   if (existente) return { uuid, duplicado: true };
 
   const metodo = await txQueryOne(
     conn,
-    'SELECT id, uuid, nombre, tipo FROM metodos_pago WHERE uuid = ?',
-    [p.metodo_pago_uuid],
+    'SELECT id, uuid, nombre, tipo FROM metodos_pago WHERE uuid = ? AND empresa_id = ?',
+    [p.metodo_pago_uuid, ctx.empresaId],
   );
   if (!metodo) throw notFound('Medio de pago');
   if (metodo.tipo !== 'CREDITO') {

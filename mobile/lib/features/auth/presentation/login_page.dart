@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/config/app_config.dart';
 import '../../../core/providers/providers.dart';
+import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/estados.dart';
+import '../../cuenta/presentation/sin_acceso.dart';
 import 'auth_providers.dart';
 
 /// Inicio de sesión.
@@ -32,6 +35,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   bool _ocultar = true;
   bool _enviando = false;
   String? _error;
+
+  /// Código de «cuenta válida sin acceso a esta app» (APP_NO_HABILITADA…).
+  /// Mientras exista, la pantalla explica el motivo en vez del formulario.
+  String? _sinAcceso;
 
   /// Por qué se cerró la sesión anterior, si la cerró la app y no el usuario:
   /// cuenta inhabilitada, fin del turno… Sin esto, el empleado sólo vería que
@@ -75,7 +82,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
       if (!mounted) return;
       if (!resultado.exito) {
-        setState(() => _error = resultado.mensajeError);
+        setState(() {
+          if (resultado.sinAccesoApp) {
+            _sinAcceso = resultado.codigo;
+            _password.clear();
+          } else {
+            _error = resultado.mensajeError;
+          }
+        });
         return;
       }
       // El router redirige solo al ver la sesión: no se navega a mano desde
@@ -160,6 +174,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   children: [
                     const _Marca(),
                     const SizedBox(height: 40),
+                    if (_sinAcceso != null)
+                      PanelSinAcceso(
+                        codigo: _sinAcceso,
+                        alUsarOtraCuenta: () => setState(() {
+                          _sinAcceso = null;
+                          _email.clear();
+                        }),
+                      ).animate().fadeIn(duration: 220.ms)
+                    else ...[
                     if (_motivoCierre != null) ...[
                       Container(
                         padding: const EdgeInsets.all(14),
@@ -264,11 +287,38 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                             )
                           : const Text('Entrar'),
                     ),
-                    const SizedBox(height: 12),
-                    TextButton.icon(
-                      onPressed: _enviando ? null : _configurarServidor,
-                      icon: const Icon(Icons.dns_outlined, size: 18),
-                      label: const Text('Configurar servidor'),
+                    const SizedBox(height: 4),
+                    Align(
+                      child: TextButton(
+                        onPressed: _enviando
+                            ? null
+                            : () => context.push(
+                                  Uri(path: Rutas.recuperarClave, queryParameters: {
+                                    if (_email.text.trim().isNotEmpty) 'email': _email.text.trim(),
+                                  }).toString(),
+                                ),
+                        child: const Text('¿Olvidaste tu contraseña?'),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        const Expanded(child: Divider()),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Text(
+                            '¿Tu negocio aún no está?',
+                            style: context.textos.bodySmall?.copyWith(color: colores.onSurfaceVariant),
+                          ),
+                        ),
+                        const Expanded(child: Divider()),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: _enviando ? null : () => context.push(Rutas.registro),
+                      icon: const Icon(Icons.add_business_outlined),
+                      label: const Text('Crear cuenta de empresa gratis'),
                     ),
                     const SizedBox(height: 24),
                     Text(
@@ -277,6 +327,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       textAlign: TextAlign.center,
                       style: context.textos.bodySmall?.copyWith(
                         color: colores.onSurfaceVariant,
+                      ),
+                    ),
+                    ],
+                    const SizedBox(height: 8),
+                    Align(
+                      child: TextButton.icon(
+                        onPressed: _enviando ? null : _configurarServidor,
+                        icon: const Icon(Icons.dns_outlined, size: 18),
+                        label: const Text('Configurar servidor'),
+                        style: TextButton.styleFrom(foregroundColor: colores.onSurfaceVariant),
                       ),
                     ),
                   ],

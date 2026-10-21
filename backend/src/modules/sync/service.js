@@ -14,6 +14,8 @@ import { sumarDias, diaHabil } from '../../utils/dates.js';
 import { veSede, huellaAlcance } from '../../domain/alcance.js';
 import { ROLES_DE_TRASLADOS, ROLES_QUE_DESPACHAN } from '../../domain/traslados.js';
 import { cargarAlcance, sedePorUuid, sedeDeDispositivo, sedePrincipal } from '../sedes/repo.js';
+import { planDeEmpresa } from '../cuenta/repo.js';
+import { traducirErrorSql } from '../../middleware/errorHandler.js';
 
 import * as productos from '../productos/service.js';
 import * as inventario from '../inventario/service.js';
@@ -42,13 +44,13 @@ const MANEJADORES = {
   CODIGO_ELIMINAR: (conn, p, ctx) => productos.eliminarCodigo(conn, p.uuid, ctx),
   STOCK_MINIMO_FIJAR: (conn, p, ctx) => productos.fijarStockMinimo(conn, p, ctx),
 
-  CATEGORIA_CREAR: (conn, p) => repoCategorias.crearOActualizar(conn, p),
-  CATEGORIA_ACTUALIZAR: (conn, p) => repoCategorias.actualizar(conn, p.uuid, p),
-  CATEGORIA_ELIMINAR: (conn, p) => repoCategorias.eliminar(conn, p.uuid),
+  CATEGORIA_CREAR: (conn, p, ctx) => repoCategorias.crearOActualizar(conn, ctx.empresaId, p),
+  CATEGORIA_ACTUALIZAR: (conn, p, ctx) => repoCategorias.actualizar(conn, ctx.empresaId, p.uuid, p),
+  CATEGORIA_ELIMINAR: (conn, p, ctx) => repoCategorias.eliminar(conn, ctx.empresaId, p.uuid),
 
-  PROVEEDOR_CREAR: (conn, p) => repoProveedores.crearOActualizar(conn, p),
-  PROVEEDOR_ACTUALIZAR: (conn, p) => repoProveedores.actualizar(conn, p.uuid, p),
-  PROVEEDOR_ELIMINAR: (conn, p) => repoProveedores.eliminar(conn, p.uuid),
+  PROVEEDOR_CREAR: (conn, p, ctx) => repoProveedores.crearOActualizar(conn, ctx.empresaId, p),
+  PROVEEDOR_ACTUALIZAR: (conn, p, ctx) => repoProveedores.actualizar(conn, ctx.empresaId, p.uuid, p),
+  PROVEEDOR_ELIMINAR: (conn, p, ctx) => repoProveedores.eliminar(conn, ctx.empresaId, p.uuid),
 
   METODO_PAGO_CREAR: (conn, p, ctx) => guardarMetodo(conn, p, ctx),
   METODO_PAGO_ACTUALIZAR: (conn, p, ctx) => actualizarMetodo(conn, p.uuid, p, ctx),
@@ -203,9 +205,12 @@ async function contextoDeOperacion(op, ctxBase) {
   const autorUuid = op.payload?.usuario_uuid;
 
   if (autorUuid && autorUuid !== ctxBase.usuarioUuid) {
+    // Solo cuentas de la MISMA empresa: un teléfono no puede subir operaciones
+    // a nombre de alguien de otra.
     const autor = await queryOne(
-      'SELECT id, uuid, rol, activo FROM usuarios WHERE uuid = ? AND deleted_at IS NULL',
-      [autorUuid],
+      `SELECT id, uuid, empresa_id, rol, activo FROM usuarios
+        WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL`,
+      [autorUuid, ctxBase.empresaId],
     );
     if (!autor) throw new ApiError(422, 'AUTOR_DESCONOCIDO', 'La operación es de un usuario que ya no existe');
 
@@ -245,12 +250,14 @@ async function contextoDeOperacion(op, ctxBase) {
   // dispositivo; y si tampoco, la principal.
   let sedeId = null;
   if (op.payload?.sede_uuid) {
-    const sede = await sedePorUuid(null, op.payload.sede_uuid);
+    const sede = await sedePorUuid(null, op.payload.sede_uuid, ctx.empresaId);
     if (!sede) throw new ApiError(422, 'SEDE_INEXISTENTE', 'La sede de la operación no existe');
     sedeId = Number(sede.id);
   } else {
     sedeId = Number(
-      (await sedeDeDispositivo(null, ctx.dispositivoUuid))?.id ?? (await sedePrincipal())?.id ?? 0,
+      (await sedeDeDispositivo(null, ctx.dispositivoUuid, ctx.empresaId))?.id ??
+        (await sedePrincipal(null, ctx.empresaId))?.id ??
+        0,
     ) || null;
   }
 
@@ -414,10 +421,14 @@ async function procesarOperacion(op, ctxBase) {
  * cual para que el cliente reintente con backoff.
  */
 async function registrarRechazo(op, ctx, err) {
+  // Los errores de la base se traducen igual que en las rutas REST: un SKU
+  // repetido o un LIMITE_PLAN son permanentes (reintentar no los arregla) y la
+  // app los muestra; tratarlos como 500 los dejaría reintentándose para siempre.
   const apiError =
     err instanceof ApiError
       ? err
-      : new ApiError(500, 'ERROR_INTERNO', err.message ?? 'Error desconocido', null, { permanente: false });
+      : (traducirErrorSql(err) ??
+        new ApiError(500, 'ERROR_INTERNO', err.message ?? 'Error desconocido', null, { permanente: false }));
 
   const cuerpo = {
     codigo: apiError.codigo,
@@ -529,7 +540,10 @@ export async function pull(cursores = {}, { limite, diasHistorial = 90, entidade
   // La configuración es una decena de filas: se manda entera siempre. Paginarla
   // costaría más de lo que ahorra.
   salida.configuracion = {
-    items: await query('SELECT clave, valor, tipo, updated_at FROM configuracion'),
+    items: await query(
+      'SELECT clave, valor, tipo, updated_at FROM empresa_configuracion WHERE empresa_id = ?',
+      [ctx.empresaId],
+    ),
     cursor: null,
     hay_mas: false,
   };
@@ -547,6 +561,9 @@ export async function pull(cursores = {}, { limite, diasHistorial = 90, entidade
     // Si cambia (cambio de sede o de rol), la app descarta lo que ya no le
     // corresponde y vuelve a bajar desde cero lo que sí.
     alcance: huellaAlcance(ctx.rol, ctx.alcance),
+    // Plan y uso: la app avisa del límite ANTES de abrir un formulario, también
+    // sin red (con el último uso conocido).
+    plan: await planDeEmpresa(ctx.empresaId),
     servidor_utc: new Date().toISOString(),
     zona_negocio: env.BUSINESS_TIMEZONE,
   };
@@ -561,12 +578,15 @@ export async function estado(ctx) {
       )
     : null;
 
-  const [conteos] = await pool.query(`
-    SELECT
-      (SELECT COUNT(*) FROM productos WHERE deleted_at IS NULL) AS productos,
-      (SELECT COUNT(*) FROM ventas WHERE deleted_at IS NULL) AS ventas,
-      (SELECT COUNT(*) FROM movimientos_inventario) AS movimientos,
-      (SELECT COUNT(*) FROM alertas WHERE resuelta_en IS NULL) AS alertas_abiertas`);
+  const sedes = ctx.alcance.sedeIds.length ? ctx.alcance.sedeIds : [0];
+  const [conteos] = await pool.query(
+    `SELECT
+      (SELECT COUNT(*) FROM productos WHERE empresa_id = ? AND deleted_at IS NULL) AS productos,
+      (SELECT COUNT(*) FROM ventas WHERE sede_id IN (?) AND deleted_at IS NULL) AS ventas,
+      (SELECT COUNT(*) FROM movimientos_inventario WHERE sede_id IN (?)) AS movimientos,
+      (SELECT COUNT(*) FROM alertas WHERE sede_id IN (?) AND resuelta_en IS NULL) AS alertas_abiertas`,
+    [ctx.empresaId, sedes, sedes, sedes],
+  );
 
   const recientes = ctx.dispositivoUuid
     ? await query(

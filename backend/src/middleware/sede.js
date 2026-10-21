@@ -19,10 +19,12 @@ export const resolverSede = (exigirAlcance = false) =>
     const uuid = req.body?.sede_uuid ?? req.query?.sede_uuid;
     let sede = null;
     if (uuid) {
-      sede = await sedePorUuid(null, uuid);
+      sede = await sedePorUuid(null, uuid, req.empresaId);
       if (!sede) throw notFound('Sede');
     } else {
-      sede = (await sedeDeDispositivo(null, req.dispositivoUuid)) ?? (await sedePrincipal());
+      sede =
+        (await sedeDeDispositivo(null, req.dispositivoUuid, req.empresaId)) ??
+        (await sedePrincipal(null, req.empresaId));
     }
     req.sedeId = sede ? Number(sede.id) : null;
 

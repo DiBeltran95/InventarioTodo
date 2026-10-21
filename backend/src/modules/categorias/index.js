@@ -38,15 +38,16 @@ router.get(
   '/',
   validar({ query: z.object({ buscar: z.string().max(100).optional() }) }),
   asyncHandler(async (req, res) => {
-    const items = await repoCategorias.listar({ buscar: req.validated.query.buscar });
+    const items = await repoCategorias.listar(req.empresaId, { buscar: req.validated.query.buscar });
     // Se acompaña de cuántos productos hay en cada categoría: la UI lo muestra
     // en la lista y pedirlo aparte serían N+1 peticiones.
     const conteos = await query(
       `SELECT c.uuid, COUNT(p.id) n
          FROM categorias c
          LEFT JOIN productos p ON p.categoria_id = c.id AND p.deleted_at IS NULL
-        WHERE c.deleted_at IS NULL
+        WHERE c.deleted_at IS NULL AND c.empresa_id = ?
         GROUP BY c.uuid`,
+      [req.empresaId],
     );
     const mapa = new Map(conteos.map((c) => [c.uuid, Number(c.n)]));
     lista(
@@ -60,7 +61,7 @@ router.get(
 router.get(
   '/:uuid',
   validar({ params: paramUuid }),
-  asyncHandler(async (req, res) => ok(res, await repoCategorias.obtener(req.params.uuid))),
+  asyncHandler(async (req, res) => ok(res, await repoCategorias.obtener(req.empresaId, req.params.uuid))),
 );
 
 router.post(
@@ -68,7 +69,7 @@ router.post(
   soloGestor,
   validar({ body: cuerpoCrear }),
   asyncHandler(async (req, res) =>
-    creado(res, await withTransaction((c) => repoCategorias.crear(c, req.body))),
+    creado(res, await withTransaction((c) => repoCategorias.crear(c, req.empresaId, req.body))),
   ),
 );
 
@@ -77,7 +78,7 @@ router.patch(
   soloGestor,
   validar({ params: paramUuid, body: cuerpoActualizar }),
   asyncHandler(async (req, res) =>
-    ok(res, await withTransaction((c) => repoCategorias.actualizar(c, req.params.uuid, req.body))),
+    ok(res, await withTransaction((c) => repoCategorias.actualizar(c, req.empresaId, req.params.uuid, req.body))),
   ),
 );
 
@@ -86,7 +87,7 @@ router.delete(
   soloGestor,
   validar({ params: paramUuid }),
   asyncHandler(async (req, res) =>
-    ok(res, await withTransaction((c) => repoCategorias.eliminar(c, req.params.uuid))),
+    ok(res, await withTransaction((c) => repoCategorias.eliminar(c, req.empresaId, req.params.uuid))),
   ),
 );
 

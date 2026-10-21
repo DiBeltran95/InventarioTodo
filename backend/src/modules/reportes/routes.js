@@ -24,7 +24,7 @@ router.use(
     const uuid = req.query?.sede;
     let sedeId = null;
     if (uuid) {
-      const sede = await sedePorUuid(null, uuid);
+      const sede = await sedePorUuid(null, uuid, req.empresaId);
       if (!sede) throw notFound('Sede');
       if (!veSede(req.alcance, sede.id)) {
         throw forbidden('Esa sede no está en tu alcance', 'SEDE_FUERA_DE_ALCANCE');

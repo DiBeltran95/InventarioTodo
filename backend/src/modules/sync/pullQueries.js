@@ -29,6 +29,13 @@
  * empleado tiene que poder decirle a un cliente «aquí no queda, pero en Norte
  * hay 3», también sin red. Es sólo cantidad por producto y sede: sin costos.
  *
+ * ── Empresa ──────────────────────────────────────────────────────────────────
+ * La base aloja muchas empresas. El catálogo, las sedes y las cuentas se
+ * filtran por `empresa_id`; lo que pertenece a una sede, por las sedes del
+ * alcance, que ya son todas de la empresa (también las del director). Ninguna
+ * consulta puede devolver filas sin uno de esos dos filtros: lo vigila
+ * `npm run lint:tenant`.
+ *
  * Orden de los parámetros de cada consulta, que es el que arma `pull()`:
  *   [t, t, i] (keyset) · [horizonte] si `horizonte` · ...extra(ctx) · límite
  * Cada SQL escribe sus `?` en ese mismo orden.
@@ -37,9 +44,13 @@
 const KEYSET = (alias) =>
   `(${alias}.updated_at > ? OR (${alias}.updated_at = ? AND ${alias}.id > ?))`;
 
-/** (? OR col IN (?)) — el primer ? vale 1 para el director. */
+/**
+ * (? OR col IN (?)) — el primer ? era el pase libre del director; con varias
+ * empresas vale siempre 0 y el director filtra por TODAS sus sedes.
+ */
 const SEDE = (columna) => `(? OR ${columna} IN (?))`;
-const alcance = (ctx) => [ctx.alcance.esDirector ? 1 : 0, ctx.alcance.sedeIds.length ? ctx.alcance.sedeIds : [0]];
+const alcance = (ctx) => [0, ctx.alcance.sedeIds.length ? ctx.alcance.sedeIds : [0]];
+const empresa = (ctx) => [ctx.empresaId];
 const esGestor = (ctx) => (['ADMIN', 'GERENTE'].includes(ctx.rol) ? 1 : 0);
 
 export const CONSULTAS = {
@@ -47,11 +58,12 @@ export const CONSULTAS = {
   // de la sede de un traslado o de una venta antigua.
   sedes: {
     horizonte: false,
+    extra: empresa,
     sql: `
       SELECT s.id AS _id, s.uuid, s.nombre, s.codigo, s.direccion, s.telefono,
              s.es_principal, s.activo, s.updated_at, s.deleted_at
         FROM sedes s
-       WHERE ${KEYSET('s')}
+       WHERE ${KEYSET('s')} AND s.empresa_id = ?
        ORDER BY s.updated_at, s.id LIMIT ?`,
   },
 
@@ -60,16 +72,22 @@ export const CONSULTAS = {
   // también cierra la sesión al terminar el turno aunque no haya red.
   usuarios: {
     horizonte: false,
-    extra: (ctx) => [ctx.alcance.esDirector ? 1 : 0, ctx.usuarioId, ...alcance(ctx).slice(1)],
+    extra: (ctx) => [ctx.empresaId, ctx.alcance.esDirector ? 1 : 0, ctx.usuarioId, ...alcance(ctx).slice(1)],
     sql: `
-      SELECT u.id AS _id, u.uuid, u.nombre, u.email, u.rol, u.activo,
+      SELECT u.id AS _id, u.uuid, u.nombre, u.email,
+             -- Sin rol en Inventario (cuenta solo de Control de Personal, o a quien
+             -- se lo quitaron) baja como INACTIVA: el teléfono no la deja entrar
+             -- sin red. No se omite la fila: una que deja de bajar nunca le
+             -- avisaría al teléfono que ya no tiene acceso.
+             COALESCE(u.rol, 'VENDEDOR') AS rol, u.rol_asistencia,
+             (u.activo = 1 AND u.rol IS NOT NULL) AS activo,
              u.restringir_horario, u.horario, u.acceso_extra_hasta,
              (SELECT GROUP_CONCAT(s.uuid ORDER BY s.uuid)
                 FROM usuario_sedes us2 JOIN sedes s ON s.id = us2.sede_id
                WHERE us2.usuario_id = u.id) AS sedes,
              u.updated_at, u.deleted_at
         FROM usuarios u
-       WHERE ${KEYSET('u')}
+       WHERE ${KEYSET('u')} AND u.empresa_id = ?
          AND (? OR u.id = ? OR u.rol = 'ADMIN'
               OR EXISTS (SELECT 1 FROM usuario_sedes us
                           WHERE us.usuario_id = u.id AND us.sede_id IN (?)))
@@ -78,21 +96,23 @@ export const CONSULTAS = {
 
   categorias: {
     horizonte: false,
+    extra: empresa,
     sql: `
       SELECT c.id AS _id, c.uuid, c.nombre, c.descripcion, c.color, c.icono, c.orden,
              c.updated_at, c.deleted_at
         FROM categorias c
-       WHERE ${KEYSET('c')}
+       WHERE ${KEYSET('c')} AND c.empresa_id = ?
        ORDER BY c.updated_at, c.id LIMIT ?`,
   },
 
   proveedores: {
     horizonte: false,
+    extra: empresa,
     sql: `
       SELECT pr.id AS _id, pr.uuid, pr.nombre, pr.nit, pr.contacto, pr.telefono,
              pr.email, pr.direccion, pr.notas, pr.updated_at, pr.deleted_at
         FROM proveedores pr
-       WHERE ${KEYSET('pr')}
+       WHERE ${KEYSET('pr')} AND pr.empresa_id = ?
        ORDER BY pr.updated_at, pr.id LIMIT ?`,
   },
 
@@ -101,6 +121,7 @@ export const CONSULTAS = {
   // que deja de coincidir con el filtro ya no vuelve a bajar.
   metodos_pago: {
     horizonte: false,
+    extra: empresa,
     sql: `
       SELECT mp.id AS _id, mp.uuid, mp.nombre, mp.tipo, mp.requiere_referencia,
              mp.qr_url, mp.instrucciones, mp.color, mp.orden, mp.activo,
@@ -108,7 +129,7 @@ export const CONSULTAS = {
              mp.updated_at, mp.deleted_at
         FROM metodos_pago mp
         LEFT JOIN sedes s ON s.id = mp.sede_id
-       WHERE ${KEYSET('mp')}
+       WHERE ${KEYSET('mp')} AND mp.empresa_id = ?
        ORDER BY mp.updated_at, mp.id LIMIT ?`,
   },
 
@@ -116,6 +137,7 @@ export const CONSULTAS = {
   // vieja; la nueva toma el stock de `stock_sedes`.
   productos: {
     horizonte: false,
+    extra: empresa,
     sql: `
       SELECT p.id AS _id, p.uuid, p.sku, p.nombre, p.descripcion,
              c.uuid AS categoria_uuid, p.unidad_medida,
@@ -125,30 +147,32 @@ export const CONSULTAS = {
              p.updated_at, p.deleted_at
         FROM productos p
         LEFT JOIN categorias c ON c.id = p.categoria_id
-       WHERE ${KEYSET('p')}
+       WHERE ${KEYSET('p')} AND p.empresa_id = ?
        ORDER BY p.updated_at, p.id LIMIT ?`,
   },
 
   producto_codigos: {
     horizonte: false,
+    extra: empresa,
     sql: `
       SELECT pc.id AS _id, pc.uuid, p.uuid AS producto_uuid, pc.codigo, pc.tipo,
              pc.es_principal, pc.factor, pc.updated_at, pc.deleted_at
         FROM producto_codigos pc
         JOIN productos p ON p.id = pc.producto_id
-       WHERE ${KEYSET('pc')}
+       WHERE ${KEYSET('pc')} AND pc.empresa_id = ?
        ORDER BY pc.updated_at, pc.id LIMIT ?`,
   },
 
   stock_sedes: {
     horizonte: false,
+    extra: empresa,
     sql: `
       SELECT ss.id AS _id, p.uuid AS producto_uuid, s.uuid AS sede_uuid,
              ss.stock_actual, ss.stock_minimo, ss.updated_at
         FROM stock_sedes ss
         JOIN productos p ON p.id = ss.producto_id
         JOIN sedes s ON s.id = ss.sede_id
-       WHERE ${KEYSET('ss')}
+       WHERE ${KEYSET('ss')} AND s.empresa_id = ?
        ORDER BY ss.updated_at, ss.id LIMIT ?`,
   },
 
@@ -321,10 +345,16 @@ export const CONSULTAS = {
        ORDER BY c.updated_at, c.id LIMIT ?`,
   },
 
-  // Sólo gestores. Un recaudo sin sede (abarca varias) sólo lo ve el director.
+  // Sólo gestores. Un recaudo sin sede (abarca varias) sólo lo ve el director
+  // (de la empresa dueña del medio de pago).
   recaudos: {
     horizonte: false,
-    extra: (ctx) => [esGestor(ctx), ...alcance(ctx)],
+    extra: (ctx) => [
+      esGestor(ctx),
+      ctx.empresaId,
+      ctx.alcance.sedeIds.length ? ctx.alcance.sedeIds : [0],
+      ctx.alcance.esDirector ? 1 : 0,
+    ],
     sql: `
       SELECT r.id AS _id, r.uuid, mp.uuid AS metodo_pago_uuid, s.uuid AS sede_uuid,
              r.fecha, r.monto, r.comision, r.referencia, r.notas, r.aplicaciones,
@@ -333,7 +363,8 @@ export const CONSULTAS = {
         JOIN metodos_pago mp ON mp.id = r.metodo_pago_id
         LEFT JOIN sedes s ON s.id = r.sede_id
         LEFT JOIN usuarios u ON u.id = r.registrado_por
-       WHERE ${KEYSET('r')} AND ? AND ${SEDE('r.sede_id')}
+       WHERE ${KEYSET('r')} AND ? AND mp.empresa_id = ?
+         AND (r.sede_id IN (?) OR (r.sede_id IS NULL AND ?))
        ORDER BY r.updated_at, r.id LIMIT ?`,
   },
 };

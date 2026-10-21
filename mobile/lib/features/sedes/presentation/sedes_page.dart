@@ -7,6 +7,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/motion.dart';
 import '../../../core/widgets/encabezado_hoja.dart';
 import '../../../core/widgets/estados.dart';
+import '../../cuenta/domain/plan.dart';
+import '../../cuenta/presentation/plan_ui.dart';
 import '../data/gestion_api.dart';
 
 final _sedesAdminProvider = FutureProvider.autoDispose<List<SedeAdmin>>(
@@ -28,6 +30,7 @@ class SedesPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final sedes = ref.watch(_sedesAdminProvider);
+    final plan = ref.watch(planProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sedes')),
@@ -45,6 +48,15 @@ class SedesPage extends ConsumerWidget {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
             children: [
+              if (plan != null && !plan.sedes.ilimitado) ...[
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: MedidorUso(recurso: RecursoLimitado.sedes, uso: plan.sedes),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               for (final (i, s) in lista.indexed)
                 EntradaEscalonada(
                   indice: i,
@@ -85,7 +97,11 @@ class SedesPage extends ConsumerWidget {
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _formulario(context, ref),
+        onPressed: () async {
+          if (await hayCupo(context, ref, RecursoLimitado.sedes) && context.mounted) {
+            await _formulario(context, ref);
+          }
+        },
         icon: const Icon(Icons.add_business_outlined),
         label: const Text('Nueva sede'),
       ),
@@ -169,6 +185,8 @@ class _FormularioSedeState extends ConsumerState<_FormularioSede> {
         Navigator.pop(context, false);
         return;
       }
+      if (await manejarLimite(context, e)) return;
+      if (!mounted) return;
       mostrarMensaje(context, e.mensajeUsuario, esError: true);
     }
   }

@@ -14,6 +14,7 @@ const router = Router();
 router.use(autenticar, resolverSede(false));
 
 const contexto = (req) => ({
+  empresaId: req.empresaId,
   usuarioId: req.usuario.id,
   usuarioUuid: req.usuario.uuid,
   dispositivoUuid: req.dispositivoUuid,
@@ -69,7 +70,7 @@ router.get(
   validar({ query: filtrosSchema }),
   asyncHandler(async (req, res) => {
     const f = req.validated.query;
-    const { items, total } = await servicio.listarMovimientos(f);
+    const { items, total } = await servicio.listarMovimientos(f, req.alcance);
     paginado(res, ocultarCostos(items, req.usuario.rol), { total, pagina: f.pagina, limite: f.limite });
   }),
 );
@@ -117,7 +118,7 @@ router.get(
     }),
   }),
   asyncHandler(async (req, res) => {
-    const items = await servicio.listarAlertas(req.validated.query);
+    const items = await servicio.listarAlertas(req.validated.query, req.alcance);
     lista(res, items, { total: items.length });
   }),
 );
@@ -126,7 +127,7 @@ router.post(
   '/alertas/:uuid/resolver',
   validar({ params: z.object({ uuid: z.string().uuid() }) }),
   asyncHandler(async (req, res) => {
-    ok(res, await withTransaction((c) => servicio.resolverAlerta(c, req.params.uuid, req.usuario.id)));
+    ok(res, await withTransaction((c) => servicio.resolverAlerta(c, req.params.uuid, req.usuario.id, req.alcance)));
   }),
 );
 
@@ -139,7 +140,7 @@ router.post(
   soloDirector,
   validar({ body: z.object({ producto_uuid: z.string().uuid().nullish() }).default({}) }),
   asyncHandler(async (req, res) => {
-    ok(res, await servicio.recalcularStock(req.body?.producto_uuid ?? null));
+    ok(res, await servicio.recalcularStock(req.body?.producto_uuid ?? null, req.empresaId));
   }),
 );
 

@@ -16,6 +16,7 @@ const router = Router();
 router.use(autenticar, resolverSede(false));
 
 const contexto = (req) => ({
+  empresaId: req.empresaId,
   usuarioId: req.usuario.id,
   usuarioUuid: req.usuario.uuid,
   dispositivoUuid: req.dispositivoUuid,
@@ -29,7 +30,7 @@ router.get(
   validar({ query: esquemas.filtrosProductoSchema }),
   asyncHandler(async (req, res) => {
     const f = req.validated.query;
-    const { items, total } = await servicio.listarProductos(f);
+    const { items, total } = await servicio.listarProductos(f, req.empresaId);
     paginado(res, ocultarCostos(items, req.usuario.rol), {
       total,
       pagina: f.pagina,
@@ -51,7 +52,7 @@ router.get(
   '/codigo/:codigo',
   validar({ params: esquemas.paramCodigo }),
   asyncHandler(async (req, res) => {
-    const producto = await servicio.buscarPorCodigo(req.params.codigo);
+    const producto = await servicio.buscarPorCodigo(req.params.codigo, req.empresaId);
     if (!producto) {
       throw notFound(`Producto para el código "${req.params.codigo}"`);
     }
@@ -63,7 +64,7 @@ router.get(
   '/:uuid',
   validar({ params: esquemas.paramUuid }),
   asyncHandler(async (req, res) => {
-    const producto = await servicio.obtenerProducto(req.params.uuid);
+    const producto = await servicio.obtenerProducto(req.params.uuid, req.empresaId);
     ok(res, {
       ...ocultarCostos(producto, req.usuario.rol),
       // Contenido exacto que debe codificar el QR de este producto.

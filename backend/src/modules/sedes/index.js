@@ -27,7 +27,7 @@ import { ok, creado } from '../../utils/responder.js';
 import { badRequest, conflict, forbidden, notFound } from '../../utils/ApiError.js';
 import { nuevoUuid } from '../../utils/ids.js';
 import { ROLES_DE_UNA_SEDE } from '../../config/constants.js';
-import { veSede, esDirector } from '../../domain/alcance.js';
+import { veSede } from '../../domain/alcance.js';
 import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
 import { sedesDeAlcance, sedePublica, exigirSedePorUuid } from './repo.js';
 
@@ -57,14 +57,18 @@ const uuidParam = z.object({ uuid: z.string().uuid() });
 async function crear(datos, req) {
   const uuid = datos.uuid ?? nuevoUuid();
   return withTransaction(async (conn) => {
-    const repetida = await txQueryOne(conn, 'SELECT 1 x FROM sedes WHERE codigo = ?', [datos.codigo]);
+    const repetida = await txQueryOne(conn, 'SELECT 1 x FROM sedes WHERE empresa_id = ? AND codigo = ?', [
+      req.empresaId,
+      datos.codigo,
+    ]);
     if (repetida) throw conflict('CODIGO_EN_USO', `Ya hay una sede con el código ${datos.codigo}`);
+    // El cupo del plan lo exige la base (trigger): si no cabe, LIMITE_PLAN → 409.
     await txExecute(
       conn,
-      'INSERT INTO sedes (uuid, nombre, codigo, direccion, telefono) VALUES (?,?,?,?,?)',
-      [uuid, datos.nombre, datos.codigo, datos.direccion ?? null, datos.telefono ?? null],
+      'INSERT INTO sedes (uuid, empresa_id, nombre, codigo, direccion, telefono) VALUES (?,?,?,?,?,?)',
+      [uuid, req.empresaId, datos.nombre, datos.codigo, datos.direccion ?? null, datos.telefono ?? null],
     );
-    const sede = await exigirSedePorUuid(conn, uuid);
+    const sede = await exigirSedePorUuid(conn, uuid, req.empresaId);
     await registrarAuditoria(conn, {
       usuarioId: req.usuario.id,
       sedeId: sede.id,
@@ -82,18 +86,20 @@ async function actualizar(uuid, datos, req) {
   return withTransaction(async (conn) => {
     const sede = await txQueryOne(
       conn,
-      'SELECT id, uuid, nombre, codigo, direccion, telefono, es_principal, activo FROM sedes WHERE uuid = ? AND deleted_at IS NULL',
-      [uuid],
+      `SELECT id, uuid, nombre, codigo, direccion, telefono, es_principal, activo
+         FROM sedes WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL`,
+      [uuid, req.empresaId],
     );
     if (!sede) throw notFound('Sede');
     if (datos.activo === false && sede.es_principal) {
       throw conflict('SEDE_PRINCIPAL', 'La sede principal no se puede desactivar');
     }
     if (datos.codigo && datos.codigo !== sede.codigo) {
-      const repetida = await txQueryOne(conn, 'SELECT 1 x FROM sedes WHERE codigo = ? AND id <> ?', [
-        datos.codigo,
-        sede.id,
-      ]);
+      const repetida = await txQueryOne(
+        conn,
+        'SELECT 1 x FROM sedes WHERE empresa_id = ? AND codigo = ? AND id <> ?',
+        [req.empresaId, datos.codigo, sede.id],
+      );
       if (repetida) throw conflict('CODIGO_EN_USO', `Ya hay una sede con el código ${datos.codigo}`);
     }
 
@@ -123,7 +129,7 @@ async function actualizar(uuid, datos, req) {
       antes: { nombre: sede.nombre, codigo: sede.codigo, activo: !!sede.activo },
       despues: datos,
     });
-    return sedePublica(await exigirSedePorUuid(conn, uuid));
+    return sedePublica(await exigirSedePorUuid(conn, uuid, req.empresaId));
   });
 }
 
@@ -144,7 +150,7 @@ async function solicitar(req, datos) {
       'SIN_PERMISO',
     );
   }
-  const destino = await exigirSedePorUuid(null, datos.sede_uuid);
+  const destino = await exigirSedePorUuid(null, datos.sede_uuid, req.empresaId);
   if (!destino.activo) throw badRequest('SEDE_INACTIVA', 'Esa sede está desactivada');
   const actual = await sedeActualDe(req.usuario.id);
   if (actual && Number(actual.id) === Number(destino.id)) {
@@ -177,7 +183,9 @@ async function listarSolicitudes(req) {
        JOIN sedes d ON d.id = sc.sede_destino_id
        LEFT JOIN usuario_sedes us ON us.usuario_id = u.id
        LEFT JOIN sedes o ON o.id = us.sede_id
+      WHERE u.empresa_id = ?
       ORDER BY sc.created_at`,
+    [req.empresaId],
   );
   return filas
     .filter(
@@ -195,7 +203,7 @@ async function listarSolicitudes(req) {
       // ¿Puede quien consulta resolverla? Evita mostrar botones que fallarían.
       puedo_resolver:
         Number(f.usuario_id) !== Number(req.usuario.id) &&
-        (esDirector(req.usuario.rol) || veSede(req.alcance, f.sede_destino_id)) &&
+        veSede(req.alcance, f.sede_destino_id) &&
         ['ADMIN', 'GERENTE'].includes(req.usuario.rol),
     }));
 }
@@ -206,8 +214,8 @@ async function resolver(req, uuid, aceptar) {
       conn,
       `SELECT sc.id, sc.usuario_id, sc.sede_destino_id, u.uuid AS usuario_uuid, u.nombre AS usuario_nombre
          FROM solicitudes_cambio_sede sc JOIN usuarios u ON u.id = sc.usuario_id
-        WHERE sc.uuid = ? FOR UPDATE`,
-      [uuid],
+        WHERE sc.uuid = ? AND u.empresa_id = ? FOR UPDATE`,
+      [uuid, req.empresaId],
     );
     if (!sol) throw notFound('Solicitud');
     if (!['ADMIN', 'GERENTE'].includes(req.usuario.rol) || !veSede(req.alcance, sol.sede_destino_id)) {
@@ -269,9 +277,12 @@ router.get(
 
 router.get(
   '/todas',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     const filas = await query(
-      'SELECT uuid, nombre, codigo FROM sedes WHERE deleted_at IS NULL AND activo = 1 ORDER BY es_principal DESC, nombre',
+      `SELECT uuid, nombre, codigo FROM sedes
+        WHERE empresa_id = ? AND deleted_at IS NULL AND activo = 1
+        ORDER BY es_principal DESC, nombre`,
+      [req.empresaId],
     );
     ok(res, filas);
   }),

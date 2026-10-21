@@ -15,6 +15,7 @@ import {
   sumar,
 } from '../../utils/money.js';
 import { bloquearProductos, insertarMovimiento, registrarAlerta } from '../inventario/service.js';
+import { prefijoWeb } from '../cuenta/repo.js';
 
 /**
  * Numeración de folios.
@@ -25,10 +26,13 @@ import { bloquearProductos, insertarMovimiento, registrarAlerta } from '../inven
  * reintentando ante clave duplicada: es más simple y barato que un contador
  * bloqueado, y ocurre rarísimas veces.
  */
-async function prefijoDelDispositivo(conn, dispositivoUuid) {
-  if (!dispositivoUuid) return 'WEB';
-  const d = await txQueryOne(conn, 'SELECT prefijo_folio FROM dispositivos WHERE uuid = ?', [dispositivoUuid]);
-  return d?.prefijo_folio ?? 'WEB';
+async function prefijoDelDispositivo(conn, dispositivoUuid, empresaId) {
+  const d = dispositivoUuid
+    ? await txQueryOne(conn, 'SELECT prefijo_folio FROM dispositivos WHERE uuid = ?', [dispositivoUuid])
+    : null;
+  // Sin dispositivo, el prefijo web de la empresa: con uno solo para todas,
+  // la numeración de una delataría cuánto vende otra.
+  return d?.prefijo_folio ?? prefijoWeb(conn, empresaId);
 }
 
 /**
@@ -47,7 +51,10 @@ async function prefijoDelDispositivo(conn, dispositivoUuid) {
  * reportes que ya la leían: con un solo medio guarda su tipo, con varios,
  * 'MIXTO'.
  */
-async function registrarPagos(conn, { ventaId, total, numero, pagos, metodoLegado, montoRecibido, cambio }) {
+async function registrarPagos(
+  conn,
+  { empresaId, ventaId, total, numero, pagos, metodoLegado, montoRecibido, cambio },
+) {
   // Sin desglose (app anterior a esta funcionalidad): se deriva un pago único
   // por el total, para que el histórico quede completo igualmente.
   const lista =
@@ -80,8 +87,9 @@ async function registrarPagos(conn, { ventaId, total, numero, pagos, metodoLegad
   if (uuids.length) {
     const filas = await txQuery(
       conn,
-      `SELECT id, uuid FROM metodos_pago WHERE uuid IN (${uuids.map(() => '?').join(',')})`,
-      uuids,
+      `SELECT id, uuid FROM metodos_pago
+        WHERE uuid IN (${uuids.map(() => '?').join(',')}) AND empresa_id = ?`,
+      [...uuids, empresaId],
     );
     for (const f of filas) idsPorUuid.set(f.uuid, f.id);
   }
@@ -165,8 +173,12 @@ const SELECT_DETALLE = `
 export async function crearVenta(conn, datos, ctx) {
   const uuid = datos.uuid ?? nuevoUuid();
 
-  const yaExiste = await txQueryOne(conn, 'SELECT id FROM ventas WHERE uuid = ?', [uuid]);
-  if (yaExiste) return { ...(await obtenerVentaTx(conn, uuid)), duplicada: true };
+  const yaExiste = await txQueryOne(
+    conn,
+    'SELECT v.id FROM ventas v JOIN sedes s ON s.id = v.sede_id WHERE v.uuid = ? AND s.empresa_id = ?',
+    [uuid, ctx.empresaId],
+  );
+  if (yaExiste) return { ...(await obtenerVentaTx(conn, uuid, ctx.empresaId)), duplicada: true };
 
   if (!datos.lineas?.length) throw badRequest('VENTA_VACIA', 'La venta no tiene líneas');
 
@@ -175,6 +187,7 @@ export async function crearVenta(conn, datos, ctx) {
   const productos = await bloquearProductos(
     conn,
     datos.lineas.map((l) => l.producto_uuid),
+    ctx.empresaId,
   );
 
   // 1) Cálculo monetario exacto, con snapshot de nombre y costo.
@@ -226,7 +239,7 @@ export async function crearVenta(conn, datos, ctx) {
   const fechaLocal = datos.fecha_local ?? diaHabil(fecha);
 
   // 3) Cabecera, con reintento de folio ante colisión.
-  const prefijo = await prefijoDelDispositivo(conn, ctx?.dispositivoUuid);
+  const prefijo = await prefijoDelDispositivo(conn, ctx?.dispositivoUuid, ctx.empresaId);
   let ventaId = null;
   let numero = datos.numero ?? null;
 
@@ -305,6 +318,7 @@ export async function crearVenta(conn, datos, ctx) {
   // reportes por medio de pago miran en un único sitio y no tienen que tratar
   // aparte el caso simple.
   await registrarPagos(conn, {
+    empresaId: ctx.empresaId,
     ventaId,
     total,
     numero,
@@ -359,7 +373,7 @@ export async function crearVenta(conn, datos, ctx) {
     });
   }
 
-  return obtenerVentaTx(conn, uuid);
+  return obtenerVentaTx(conn, uuid, ctx.empresaId);
 }
 
 // ── Anulación ───────────────────────────────────────────────────────────────
@@ -376,14 +390,16 @@ export async function crearVenta(conn, datos, ctx) {
 export async function anularVenta(conn, datos, ctx) {
   const original = await txQueryOne(
     conn,
-    'SELECT id, uuid, numero, estado, fecha_local, sede_id FROM ventas WHERE uuid = ? FOR UPDATE',
-    [datos.venta_uuid],
+    `SELECT v.id, v.uuid, v.numero, v.estado, v.fecha_local, v.sede_id
+       FROM ventas v JOIN sedes s ON s.id = v.sede_id
+      WHERE v.uuid = ? AND s.empresa_id = ? FOR UPDATE`,
+    [datos.venta_uuid, ctx.empresaId],
   );
   if (!original) throw notFound('Venta');
   // La anulación ocurre en la sede de la venta, desde donde se pida: el stock
   // vuelve a los estantes de los que salió.
   ctx = { ...ctx, sedeId: original.sede_id };
-  if (ctx.alcance && !ctx.alcance.esDirector && !ctx.alcance.sedeIds.includes(Number(original.sede_id))) {
+  if (ctx.alcance && !ctx.alcance.sedeIds.includes(Number(original.sede_id))) {
     throw forbidden('Esa venta es de una sede que no gestionas', 'SEDE_FUERA_DE_ALCANCE');
   }
 
@@ -403,7 +419,7 @@ export async function anularVenta(conn, datos, ctx) {
   if (!detalles.length) throw badRequest('VENTA_SIN_DETALLE', 'La venta no tiene líneas que revertir');
 
   const conProducto = detalles.filter((d) => d.producto_uuid);
-  const productos = await bloquearProductos(conn, conProducto.map((d) => d.producto_uuid));
+  const productos = await bloquearProductos(conn, conProducto.map((d) => d.producto_uuid), ctx.empresaId);
 
   const fecha = datos.fecha ? new Date(datos.fecha) : new Date();
   const fechaLocal = datos.fecha_local ?? diaHabil(fecha);
@@ -509,9 +525,10 @@ export async function anularVenta(conn, datos, ctx) {
 
 // ── Lecturas ────────────────────────────────────────────────────────────────
 
-export async function listarVentas(filtros) {
-  const where = ['v.deleted_at IS NULL'];
-  const params = [];
+export async function listarVentas(filtros, alcance) {
+  // Las sedes del alcance son todas de la empresa (las del director también).
+  const where = ['v.deleted_at IS NULL', 'v.sede_id IN (?)'];
+  const params = [alcance.sedeIds.length ? alcance.sedeIds : [0]];
 
   if (filtros.estado && filtros.estado !== 'todas') {
     where.push('v.estado = ?');
@@ -560,14 +577,14 @@ export async function listarVentas(filtros) {
   return { items, total: Number(conteo.total) };
 }
 
-export async function obtenerVenta(uuid) {
+export async function obtenerVenta(uuid, alcance) {
   const venta = await queryOne(
     `SELECT ${SELECT_VENTA}, v.id AS _id
        FROM ventas v
        LEFT JOIN usuarios u ON u.id = v.usuario_id
        LEFT JOIN ventas vo ON vo.id = v.anula_a_venta_id
-      WHERE v.uuid = ? AND v.deleted_at IS NULL`,
-    [uuid],
+      WHERE v.uuid = ? AND v.sede_id IN (?) AND v.deleted_at IS NULL`,
+    [uuid, alcance.sedeIds.length ? alcance.sedeIds : [0]],
   );
   if (!venta) throw notFound('Venta');
   const detalles = await query(
@@ -580,15 +597,16 @@ export async function obtenerVenta(uuid) {
   return { ...venta, detalles };
 }
 
-async function obtenerVentaTx(conn, uuid) {
+async function obtenerVentaTx(conn, uuid, empresaId) {
   const venta = await txQueryOne(
     conn,
     `SELECT ${SELECT_VENTA}, v.id AS _id
        FROM ventas v
+       JOIN sedes sv ON sv.id = v.sede_id
        LEFT JOIN usuarios u ON u.id = v.usuario_id
        LEFT JOIN ventas vo ON vo.id = v.anula_a_venta_id
-      WHERE v.uuid = ?`,
-    [uuid],
+      WHERE v.uuid = ? AND sv.empresa_id = ?`,
+    [uuid, empresaId],
   );
   if (!venta) throw notFound('Venta');
   const detalles = await txQuery(

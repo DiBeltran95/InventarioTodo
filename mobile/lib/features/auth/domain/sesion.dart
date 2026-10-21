@@ -87,6 +87,9 @@ class UsuarioAdmin {
     required this.email,
     required this.rol,
     required this.activo,
+    this.conAccesoInventario = true,
+    this.rolAsistencia,
+    this.documento,
     this.telefono,
     this.ultimoAcceso,
     this.sedes = const [],
@@ -103,6 +106,9 @@ class UsuarioAdmin {
       nombre: json['nombre'] as String,
       email: json['email'] as String,
       rol: RolUsuario.desde(json['rol'] as String?),
+      conAccesoInventario: json['rol'] != null,
+      rolAsistencia: json['rol_asistencia'] as String?,
+      documento: json['documento'] as String?,
       // MariaDB devuelve los TINYINT(1) como 0/1, no como booleanos.
       activo: json['activo'] == true || json['activo'] == 1,
       telefono: json['telefono'] as String?,
@@ -133,6 +139,15 @@ class UsuarioAdmin {
   final String email;
   final RolUsuario rol;
   final bool activo;
+
+  /// La cuenta es UNA para las dos apps de la plataforma. Sin rol en
+  /// Inventario (solo usa Control de Personal) llega `rol: null` y [rol] queda
+  /// en vendedor por seguridad: esto dice si de verdad entra aquí.
+  final bool conAccesoInventario;
+
+  /// Rol en Control de Personal: 'ADMIN', 'GERENTE', 'OPERADOR' o null.
+  final String? rolAsistencia;
+  final String? documento;
   final String? telefono;
   final DateTime? ultimoAcceso;
   final List<({String uuid, String nombre})> sedes;
@@ -213,17 +228,36 @@ class ResultadoLogin {
   const ResultadoLogin._({
     this.sesion,
     this.mensajeError,
+    this.codigo,
     this.necesitaDescargaInicial = false,
   });
 
   factory ResultadoLogin.ok(Sesion sesion, {bool necesitaDescargaInicial = false}) =>
       ResultadoLogin._(sesion: sesion, necesitaDescargaInicial: necesitaDescargaInicial);
 
-  factory ResultadoLogin.error(String mensaje) => ResultadoLogin._(mensajeError: mensaje);
+  factory ResultadoLogin.error(String mensaje, {String? codigo}) =>
+      ResultadoLogin._(mensajeError: mensaje, codigo: codigo);
 
   final Sesion? sesion;
   final String? mensajeError;
+
+  /// Código del servidor cuando el login falló (CREDENCIALES_INVALIDAS,
+  /// APP_NO_HABILITADA…). Con él la pantalla decide si es un error o un
+  /// «no tienes acceso a esta app» que merece su propia explicación.
+  final String? codigo;
   final bool necesitaDescargaInicial;
 
   bool get exito => sesion != null;
+
+  /// La contraseña era correcta pero esta cuenta no puede usar Inventario.
+  bool get sinAccesoApp => codigosSinAcceso.contains(codigo);
 }
+
+/// Motivos por los que una cuenta válida no entra a esta app (docs/PLATAFORMA.md).
+const codigosSinAcceso = {
+  'CUENTA_DESACTIVADA',
+  'EMPRESA_INEXISTENTE',
+  'EMPRESA_SUSPENDIDA',
+  'APP_NO_HABILITADA',
+  'SIN_ACCESO_APP',
+};

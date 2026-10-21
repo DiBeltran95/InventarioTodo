@@ -23,7 +23,11 @@ export async function abrirCaja(conn, p, ctx) {
   if (!ROLES_QUE_VENDEN.includes(ctx.rol)) {
     throw forbidden('Tu rol no maneja caja', 'SIN_PERMISO');
   }
-  const existente = await txQueryOne(conn, 'SELECT uuid, estado FROM cierres_caja WHERE uuid = ?', [p.uuid]);
+  const existente = await txQueryOne(
+    conn,
+    'SELECT uuid, estado FROM cierres_caja WHERE uuid = ? AND sede_id IN (?)',
+    [p.uuid, ctx.alcance.sedeIds.length ? ctx.alcance.sedeIds : [0]],
+  );
   if (existente) return { uuid: p.uuid, estado: existente.estado, duplicado: true };
 
   // Una sola caja abierta por persona: dos cajas a la vez harían imposible
@@ -55,8 +59,9 @@ export async function abrirCaja(conn, p, ctx) {
 export async function cerrarCaja(conn, p, ctx) {
   const c = await txQueryOne(
     conn,
-    'SELECT id, uuid, sede_id, usuario_id, estado, base_efectivo FROM cierres_caja WHERE uuid = ? FOR UPDATE',
-    [p.uuid],
+    `SELECT id, uuid, sede_id, usuario_id, estado, base_efectivo FROM cierres_caja
+      WHERE uuid = ? AND sede_id IN (?) FOR UPDATE`,
+    [p.uuid, ctx.alcance.sedeIds.length ? ctx.alcance.sedeIds : [0]],
   );
   if (!c) throw notFound('Caja');
   if (c.estado === 'CERRADO') return { uuid: c.uuid, estado: 'CERRADO', duplicado: true };
@@ -143,8 +148,8 @@ export async function cerrarCaja(conn, p, ctx) {
 export async function revisarCierre(conn, p, ctx) {
   const c = await txQueryOne(
     conn,
-    'SELECT id, uuid, sede_id, estado, revisado_por FROM cierres_caja WHERE uuid = ? FOR UPDATE',
-    [p.uuid],
+    'SELECT id, uuid, sede_id, estado, revisado_por FROM cierres_caja WHERE uuid = ? AND sede_id IN (?) FOR UPDATE',
+    [p.uuid, ctx.alcance.sedeIds.length ? ctx.alcance.sedeIds : [0]],
   );
   if (!c) throw notFound('Caja');
   if (!ROLES_GESTORES.includes(ctx.rol) || !veSede(ctx.alcance, c.sede_id)) {

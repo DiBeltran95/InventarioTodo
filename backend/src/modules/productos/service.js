@@ -14,22 +14,30 @@ const COLUMNAS = `
   p.created_at, p.updated_at,
   c.uuid AS categoria_uuid, c.nombre AS categoria_nombre, c.color AS categoria_color`;
 
-/** Traduce categoria_uuid -> id interno, validando que exista. */
-async function resolverCategoria(conn, categoriaUuid) {
+/**
+ * Plataforma multiempresa: cada consulta lleva `empresa_id`. Un UUID es
+ * global, así que buscar solo por él dejaría leer o tocar el producto de otra
+ * empresa con conocer su UUID (o escanear su QR).
+ */
+
+/** Traduce categoria_uuid -> id interno, validando que exista en la empresa. */
+async function resolverCategoria(conn, categoriaUuid, empresaId) {
   if (categoriaUuid === undefined) return undefined;
   if (categoriaUuid === null || categoriaUuid === '') return null;
-  const fila = await txQueryOne(conn, 'SELECT id FROM categorias WHERE uuid = ? AND deleted_at IS NULL', [
-    categoriaUuid,
-  ]);
+  const fila = await txQueryOne(
+    conn,
+    'SELECT id FROM categorias WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL',
+    [categoriaUuid, empresaId],
+  );
   if (!fila) throw badRequest('CATEGORIA_INVALIDA', 'La categoría indicada no existe');
   return fila.id;
 }
 
 // ── Lecturas ────────────────────────────────────────────────────────────────
 
-export async function listarProductos(filtros) {
-  const where = ['p.deleted_at IS NULL'];
-  const params = [];
+export async function listarProductos(filtros, empresaId) {
+  const where = ['p.empresa_id = ?', 'p.deleted_at IS NULL'];
+  const params = [empresaId];
 
   if (filtros.activo !== null) {
     where.push('p.activo = ?');
@@ -42,6 +50,7 @@ export async function listarProductos(filtros) {
   if (filtros.buscar) {
     // Se busca también por código para que el buscador manual sirva cuando la
     // cámara no lee la etiqueta (envases arrugados, poca luz).
+    // aislamiento: fragmento del WHERE de arriba, que ya filtra p.empresa_id
     where.push(`(p.nombre LIKE ? OR p.sku LIKE ? OR EXISTS (
                    SELECT 1 FROM producto_codigos pc
                     WHERE pc.producto_id = p.id AND pc.deleted_at IS NULL AND pc.codigo LIKE ?))`);
@@ -93,13 +102,13 @@ export async function listarProductos(filtros) {
   return { items, total: Number(conteo.total) };
 }
 
-export async function obtenerProducto(uuid) {
+export async function obtenerProducto(uuid, empresaId) {
   const producto = await queryOne(
     `SELECT ${COLUMNAS}, p.id AS _id
        FROM productos p
        LEFT JOIN categorias c ON c.id = p.categoria_id
-      WHERE p.uuid = ? AND p.deleted_at IS NULL`,
-    [uuid],
+      WHERE p.uuid = ? AND p.empresa_id = ? AND p.deleted_at IS NULL`,
+    [uuid, empresaId],
   );
   if (!producto) throw notFound('Producto');
 
@@ -120,7 +129,7 @@ export async function obtenerProducto(uuid) {
  * Devuelve también el `factor` del código: escanear la caja de 12 debe agregar
  * 12 unidades, no una.
  */
-export async function buscarPorCodigo(codigoBruto) {
+export async function buscarPorCodigo(codigoBruto, empresaId) {
   const codigo = String(codigoBruto).trim();
 
   if (codigo.startsWith(QR_PREFIX)) {
@@ -128,8 +137,8 @@ export async function buscarPorCodigo(codigoBruto) {
     const p = await queryOne(
       `SELECT ${COLUMNAS} FROM productos p
          LEFT JOIN categorias c ON c.id = p.categoria_id
-        WHERE p.uuid = ? AND p.deleted_at IS NULL`,
-      [uuid],
+        WHERE p.uuid = ? AND p.empresa_id = ? AND p.deleted_at IS NULL`,
+      [uuid, empresaId],
     );
     if (p) return { ...p, factor: '1.000', origen: 'QR_APP' };
   }
@@ -139,16 +148,16 @@ export async function buscarPorCodigo(codigoBruto) {
        FROM producto_codigos pc
        JOIN productos p ON p.id = pc.producto_id AND p.deleted_at IS NULL
        LEFT JOIN categorias c ON c.id = p.categoria_id
-      WHERE pc.codigo = ? AND pc.deleted_at IS NULL`,
-    [codigo],
+      WHERE pc.codigo = ? AND pc.empresa_id = ? AND pc.deleted_at IS NULL`,
+    [codigo, empresaId],
   );
   if (porCodigo) return { ...porCodigo, origen: 'CODIGO' };
 
   const porSku = await queryOne(
     `SELECT ${COLUMNAS} FROM productos p
        LEFT JOIN categorias c ON c.id = p.categoria_id
-      WHERE p.sku = ? AND p.deleted_at IS NULL`,
-    [codigo],
+      WHERE p.sku = ? AND p.empresa_id = ? AND p.deleted_at IS NULL`,
+    [codigo, empresaId],
   );
   if (porSku) return { ...porSku, factor: '1.000', origen: 'SKU' };
 
@@ -162,20 +171,28 @@ export async function crearProducto(conn, datos, ctx) {
 
   // Idempotencia estructural: si el uuid ya existe (reenvío de la cola offline),
   // se converge al mismo estado en lugar de devolver "duplicado".
-  const existente = await txQueryOne(conn, 'SELECT id FROM productos WHERE uuid = ?', [uuid]);
+  // Un uuid que existe en OTRA empresa no se encuentra aquí y el INSERT choca
+  // con su llave única: nunca se pisa lo ajeno.
+  const existente = await txQueryOne(conn, 'SELECT id FROM productos WHERE uuid = ? AND empresa_id = ?', [
+    uuid,
+    ctx.empresaId,
+  ]);
   if (existente) return actualizarProducto(conn, uuid, datos, ctx);
 
-  const categoriaId = await resolverCategoria(conn, datos.categoria_uuid);
+  const categoriaId = await resolverCategoria(conn, datos.categoria_uuid, ctx.empresaId);
 
+  // El cupo de productos del plan lo exige la base (trigger): si no cabe uno
+  // más, el INSERT falla con LIMITE_PLAN y la API responde 409.
   const resultado = await txExecute(
     conn,
     `INSERT INTO productos
-       (uuid, sku, nombre, descripcion, categoria_id, unidad_medida,
+       (uuid, empresa_id, sku, nombre, descripcion, categoria_id, unidad_medida,
         precio_compra, precio_venta, tasa_iva, stock_minimo, stock_maximo,
         imagen_url, ubicacion, activo)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       uuid,
+      ctx.empresaId,
       datos.sku,
       datos.nombre,
       datos.descripcion ?? null,
@@ -194,7 +211,7 @@ export async function crearProducto(conn, datos, ctx) {
   const productoId = resultado.insertId;
 
   for (const c of datos.codigos ?? []) {
-    await insertarCodigo(conn, productoId, c);
+    await insertarCodigo(conn, productoId, c, ctx.empresaId);
   }
 
   if (datos.stock_inicial && Number(datos.stock_inicial) !== 0) {
@@ -219,14 +236,15 @@ export async function crearProducto(conn, datos, ctx) {
     );
   }
 
-  return obtenerProductoTx(conn, uuid);
+  return obtenerProductoTx(conn, uuid, ctx.empresaId);
 }
 
 export async function actualizarProducto(conn, uuid, datos, ctx) {
   const producto = await txQueryOne(
     conn,
-    'SELECT id, nombre, precio_compra, precio_venta, stock_minimo FROM productos WHERE uuid = ?',
-    [uuid],
+    `SELECT id, nombre, precio_compra, precio_venta, stock_minimo
+       FROM productos WHERE uuid = ? AND empresa_id = ?`,
+    [uuid, ctx.empresaId],
   );
   if (!producto) throw notFound('Producto');
 
@@ -249,7 +267,7 @@ export async function actualizarProducto(conn, uuid, datos, ctx) {
   }
   if (datos.categoria_uuid !== undefined) {
     asignaciones.push('categoria_id = ?');
-    valores.push(await resolverCategoria(conn, datos.categoria_uuid));
+    valores.push(await resolverCategoria(conn, datos.categoria_uuid, ctx.empresaId));
   }
 
   // Nunca se acepta stock_actual desde el cliente: es derivado del libro de
@@ -261,7 +279,7 @@ export async function actualizarProducto(conn, uuid, datos, ctx) {
     );
   }
 
-  if (!asignaciones.length) return obtenerProductoTx(conn, uuid);
+  if (!asignaciones.length) return obtenerProductoTx(conn, uuid, ctx.empresaId);
 
   // Reactivar un producto borrado forma parte de la convergencia offline.
   asignaciones.push('deleted_at = NULL');
@@ -303,7 +321,7 @@ export async function actualizarProducto(conn, uuid, datos, ctx) {
     );
   }
 
-  return obtenerProductoTx(conn, uuid);
+  return obtenerProductoTx(conn, uuid, ctx.empresaId);
 }
 
 /**
@@ -311,9 +329,11 @@ export async function actualizarProducto(conn, uuid, datos, ctx) {
  * Cada sede puede necesitar uno distinto: la del centro vende el triple.
  */
 export async function fijarStockMinimo(conn, datos, ctx) {
-  const producto = await txQueryOne(conn, 'SELECT id FROM productos WHERE uuid = ? AND deleted_at IS NULL', [
-    datos.producto_uuid,
-  ]);
+  const producto = await txQueryOne(
+    conn,
+    'SELECT id FROM productos WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL',
+    [datos.producto_uuid, ctx.empresaId],
+  );
   if (!producto) throw notFound('Producto');
   const sedeId = ctx?.sedeId;
   if (!sedeId) throw badRequest('SIN_SEDE', 'Falta la sede');
@@ -331,8 +351,8 @@ export async function fijarStockMinimo(conn, datos, ctx) {
 export async function eliminarProducto(conn, uuid, ctx) {
   const producto = await txQueryOne(
     conn,
-    'SELECT id, nombre, sku, stock_actual FROM productos WHERE uuid = ?',
-    [uuid],
+    'SELECT id, nombre, sku, stock_actual FROM productos WHERE uuid = ? AND empresa_id = ?',
+    [uuid, ctx.empresaId],
   );
   if (!producto) throw notFound('Producto');
 
@@ -362,12 +382,14 @@ export async function eliminarProducto(conn, uuid, ctx) {
   return { uuid, eliminado: true };
 }
 
-async function insertarCodigo(conn, productoId, codigo) {
+async function insertarCodigo(conn, productoId, codigo, empresaId) {
   const uuid = codigo.uuid ?? nuevoUuid();
+  // El mismo EAN puede existir en otra empresa (es el mismo producto de
+  // fábrica en otra tienda): solo choca dentro de la propia.
   const yaExiste = await txQueryOne(
     conn,
-    'SELECT id, producto_id, deleted_at FROM producto_codigos WHERE codigo = ?',
-    [codigo.codigo],
+    'SELECT id, producto_id, deleted_at FROM producto_codigos WHERE codigo = ? AND empresa_id = ?',
+    [codigo.codigo, empresaId],
   );
 
   if (yaExiste) {
@@ -397,21 +419,26 @@ async function insertarCodigo(conn, productoId, codigo) {
   return uuid;
 }
 
-export async function agregarCodigo(conn, productoUuid, codigo, _ctx) {
-  const producto = await txQueryOne(conn, 'SELECT id FROM productos WHERE uuid = ? AND deleted_at IS NULL', [
-    productoUuid,
-  ]);
+export async function agregarCodigo(conn, productoUuid, codigo, ctx) {
+  const producto = await txQueryOne(
+    conn,
+    'SELECT id FROM productos WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL',
+    [productoUuid, ctx.empresaId],
+  );
   if (!producto) throw notFound('Producto');
-  const uuid = await insertarCodigo(conn, producto.id, codigo);
+  const uuid = await insertarCodigo(conn, producto.id, codigo, ctx.empresaId);
   return txQueryOne(
     conn,
-    'SELECT uuid, codigo, tipo, es_principal, factor FROM producto_codigos WHERE uuid = ?',
-    [uuid],
+    'SELECT uuid, codigo, tipo, es_principal, factor FROM producto_codigos WHERE uuid = ? AND empresa_id = ?',
+    [uuid, ctx.empresaId],
   );
 }
 
-export async function eliminarCodigo(conn, codigoUuid, _ctx) {
-  const fila = await txQueryOne(conn, 'SELECT id FROM producto_codigos WHERE uuid = ?', [codigoUuid]);
+export async function eliminarCodigo(conn, codigoUuid, ctx) {
+  const fila = await txQueryOne(conn, 'SELECT id FROM producto_codigos WHERE uuid = ? AND empresa_id = ?', [
+    codigoUuid,
+    ctx.empresaId,
+  ]);
   if (!fila) throw notFound('Código');
   await txExecute(
     conn,
@@ -422,14 +449,14 @@ export async function eliminarCodigo(conn, codigoUuid, _ctx) {
 }
 
 /** Igual que obtenerProducto pero dentro de la transacción en curso. */
-async function obtenerProductoTx(conn, uuid) {
+async function obtenerProductoTx(conn, uuid, empresaId) {
   const producto = await txQueryOne(
     conn,
     `SELECT ${COLUMNAS}, p.id AS _id
        FROM productos p
        LEFT JOIN categorias c ON c.id = p.categoria_id
-      WHERE p.uuid = ?`,
-    [uuid],
+      WHERE p.uuid = ? AND p.empresa_id = ?`,
+    [uuid, empresaId],
   );
   if (!producto) throw notFound('Producto');
   const codigos = await txQuery(

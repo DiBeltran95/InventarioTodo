@@ -6,7 +6,7 @@
 class AppConfig {
   const AppConfig._();
 
-  static const String nombreApp = 'Inventario POS';
+  static const String nombreApp = 'Ventario';
   static const String versionApi = '/api/v1';
 
   /// Prefijo de los QR emitidos por esta app. Debe coincidir con `QR_PREFIX`

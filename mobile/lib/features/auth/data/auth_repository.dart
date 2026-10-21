@@ -14,6 +14,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/network/token_store.dart';
 import '../../../core/security/password_hash.dart';
+import '../../cuenta/domain/plan.dart';
 import '../domain/jornada_usuario.dart';
 import '../domain/sesion.dart';
 
@@ -94,8 +95,12 @@ class AuthRepository {
         if (e.status == 401 || e.status == 403) {
           // Una cuenta inhabilitada no debe poder entrar tampoco sin red con
           // la copia local de su contraseña.
-          if (e.codigo == 'CUENTA_DESACTIVADA') await _marcarInactivo(correo);
-          return ResultadoLogin.error(e.mensajeUsuario);
+          // Lo mismo si su empresa ya no tiene acceso a la app (suspendida, sin
+          // la app, sin rol aquí): esa copia local tampoco debe abrir.
+          if (e.codigo == 'CUENTA_DESACTIVADA' || codigosSinAcceso.contains(e.codigo)) {
+            await _marcarInactivo(correo);
+          }
+          return ResultadoLogin.error(e.mensajeUsuario, codigo: e.codigo);
         }
         rethrow;
       }
@@ -112,9 +117,77 @@ class AuthRepository {
       sinAuth: true,
       cuerpo: {'email': email, 'password': password, 'dispositivo': dispositivo},
     );
+    return _abrirSesion(respuesta['data'] as Map<String, dynamic>, email, password, dispositivo);
+  }
 
-    final datos = respuesta['data'] as Map<String, dynamic>;
+  /// Registra una empresa nueva (plan Gratis) y deja la sesión abierta como su
+  /// administrador. El servidor responde lo mismo que un login.
+  Future<ResultadoLogin> registrarEmpresa({
+    required String empresa,
+    String? nit,
+    String? telefono,
+    required String sede,
+    required String nombre,
+    required String email,
+    required String password,
+  }) async {
+    final correo = email.trim().toLowerCase();
+    final dispositivo = await _datosDispositivo();
+    _api.dispositivoUuid = dispositivo['uuid'] as String;
+    try {
+      final respuesta = await _api.post('/cuenta/registro', sinAuth: true, cuerpo: {
+        'empresa': {'nombre': empresa, 'nit': nit, 'telefono': telefono},
+        'sede': {'nombre': sede},
+        'usuario': {'nombre': nombre, 'email': correo, 'password': password},
+        'acepta_terminos': true,
+        'dispositivo': dispositivo,
+      });
+      return await _abrirSesion(respuesta['data'] as Map<String, dynamic>, correo, password, dispositivo);
+    } on ApiException catch (e) {
+      if (e.esDeRed) return ResultadoLogin.error('Necesitas conexión a internet para crear la empresa.', codigo: e.codigo);
+      return ResultadoLogin.error(e.mensajeUsuario, codigo: e.codigo);
+    }
+  }
+
+  static const _kEmpresaUuid = 'empresa_uuid';
+
+  /// Deja la sesión que entrega el servidor (login o registro) lista para
+  /// operar, también sin red.
+  ///
+  /// Un teléfono es de UNA empresa a la vez. Si entra alguien de otra, lo
+  /// descargado de la anterior se borra antes de bajar lo nuevo; pero si
+  /// quedan operaciones sin subir (ventas cobradas), no se borra nada y se
+  /// pide subirlas primero: esas operaciones son el único registro de ese dinero.
+  Future<ResultadoLogin> _abrirSesion(
+    Map<String, dynamic> datos,
+    String email,
+    String password,
+    Map<String, dynamic> dispositivo,
+  ) async {
     final usuario = datos['usuario'] as Map<String, dynamic>;
+    final empresaUuid = (datos['empresa'] as Map?)?['uuid'] as String?;
+
+    final prefsEmpresa = await SharedPreferences.getInstance();
+    final empresaAnterior = prefsEmpresa.getString(_kEmpresaUuid);
+    if (empresaUuid != null && empresaAnterior != null && empresaAnterior != empresaUuid) {
+      final pendientes = await operacionesSinEnviar();
+      if (pendientes > 0) {
+        return ResultadoLogin.error(
+          'Este teléfono tiene $pendientes operación(es) de otra empresa sin subir. '
+          'Entra con una cuenta de esa empresa y sincroniza antes de cambiar de empresa.',
+          codigo: 'OTRA_EMPRESA_CON_PENDIENTES',
+        );
+      }
+      await _db.limpiarDatos();
+      // La sede activa y la huella del alcance eran de la otra empresa.
+      await (_db.update(_db.estadoApp)..where((t) => t.id.equals(1))).write(const EstadoAppCompanion(
+        secuenciaFolio: Value(0),
+        sedeActivaUuid: Value(null),
+        alcance: Value(null),
+      ));
+      await PlanLocal.olvidar();
+    }
+    if (empresaUuid != null) await prefsEmpresa.setString(_kEmpresaUuid, empresaUuid);
 
     await _tokens.guardarTokens(
       accessToken: datos['access_token'] as String,
@@ -422,6 +495,48 @@ class AuthRepository {
   Future<String?> ultimoEmail() async =>
       (await SharedPreferences.getInstance()).getString(_kUltimoEmail);
 
+  // ── Cuenta de la empresa (docs/PLATAFORMA.md) ──────────────────────────────
+
+  /// Envía un código de 6 números al correo. El servidor responde lo mismo
+  /// exista o no la cuenta. Devuelve los minutos que dura el código.
+  Future<int> recuperarClave(String email) async {
+    final r = await _api.post('/cuenta/recuperar', sinAuth: true, cuerpo: {'email': email.trim().toLowerCase()});
+    return (((r['data'] as Map?)?['vigencia_minutos'] as num?) ?? 15).toInt();
+  }
+
+  Future<void> restablecerClave({required String email, required String codigo, required String password}) async {
+    final correo = email.trim().toLowerCase();
+    await _api.post('/cuenta/restablecer', sinAuth: true, cuerpo: {
+      'email': correo,
+      'codigo': codigo,
+      'password': password,
+    });
+    // El derivado local de la contraseña vieja ya no debe abrir la app sin red.
+    await (_db.update(_db.usuarios)..where((t) => t.email.equals(correo)))
+        .write(const UsuariosCompanion(passwordHashLocal: Value(null), saltLocal: Value(null)));
+  }
+
+  /// Datos, plan, uso y apps de la empresa. Guarda el plan para avisar del
+  /// límite sin red.
+  Future<EmpresaInfo> empresa() async {
+    final r = await _api.get('/cuenta/empresa');
+    final datos = r['data'] as Map<String, dynamic>;
+    await PlanLocal.guardar(datos['plan']);
+    return EmpresaInfo.desdeJson(datos);
+  }
+
+  Future<EmpresaInfo> editarEmpresa({String? nombre, String? nit, String? telefono}) async {
+    final r = await _api.put('/cuenta/empresa', cuerpo: {'nombre': ?nombre, 'nit': ?nit, 'telefono': ?telefono});
+    return EmpresaInfo.desdeJson(r['data'] as Map<String, dynamic>);
+  }
+
+  /// El director elimina la EMPRESA ([confirmacion] = su nombre); cualquier
+  /// otra persona, su cuenta. Después la sesión se cierra en el teléfono.
+  Future<void> eliminarCuenta({required String password, String? confirmacion}) async {
+    await _api.delete('/cuenta', cuerpo: {'password': password, 'confirmacion': ?confirmacion});
+    await cerrarSesion();
+  }
+
   // ── Gestión de usuarios (ADMIN) ─────────────────────────────────────────
   //
   // Único rincón de la app que **exige conexión**. No es una omisión: crear una
@@ -442,17 +557,25 @@ class AuthRepository {
     required String nombre,
     required String email,
     required String password,
-    required RolUsuario rol,
+    required RolUsuario? rol,
     String? telefono,
     List<String> sedes = const [],
     bool restringirHorario = false,
     List<TramoHorario> horario = const [],
+    String? rolAsistencia,
+    String? documento,
+    bool marcaAsistencia = false,
   }) async {
     await _api.post('/auth/usuarios', cuerpo: {
       'nombre': nombre,
       'email': email,
       'password': password,
-      'rol': rol.api,
+      // null = sin acceso a Inventario (solo usa Control de Personal).
+      'rol': rol?.api,
+      // La misma cuenta entra a Control de Personal con este rol (null = no).
+      'rol_asistencia': rolAsistencia,
+      if (documento != null && documento.isNotEmpty) 'documento': documento,
+      'marca_asistencia': marcaAsistencia,
       if (telefono != null && telefono.isNotEmpty) 'telefono': telefono,
       'sedes': sedes,
       'restringir_horario': restringirHorario,
@@ -470,12 +593,18 @@ class AuthRepository {
     List<String>? sedes,
     bool? restringirHorario,
     List<TramoHorario>? horario,
+    bool cambiarRolAsistencia = false,
+    String? rolAsistencia,
+    bool quitarAccesoInventario = false,
   }) async {
     await _api.patch('/auth/usuarios/$uuid', cuerpo: {
       // Sólo viajan los campos que cambian: un PATCH con nulos borraría datos.
       'nombre': ?nombre,
       'email': ?email,
-      'rol': ?rol?.api,
+      if (quitarAccesoInventario) 'rol': null else 'rol': ?rol?.api,
+      // Aquí null sí significa algo («sin acceso a Control de Personal»): viaja
+      // solo cuando se cambió a propósito.
+      if (cambiarRolAsistencia) 'rol_asistencia': rolAsistencia,
       'activo': ?activo,
       if (password != null && password.isNotEmpty) 'password': password,
       'sedes': ?sedes,

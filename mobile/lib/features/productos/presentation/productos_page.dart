@@ -11,6 +11,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/estados.dart';
 import '../../../core/widgets/sync_chip.dart';
 import '../../auth/presentation/auth_providers.dart';
+import '../../cuenta/domain/plan.dart';
+import '../../cuenta/presentation/plan_ui.dart';
 import 'productos_providers.dart';
 import 'widgets/tarjeta_producto.dart';
 
@@ -150,7 +152,7 @@ class _ProductosPageState extends ConsumerState<ProductosPage> {
                               _busqueda.clear();
                               ref.read(filtroProductosProvider.notifier).limpiar();
                             }
-                          : () => context.push(Rutas.productoNuevo),
+                          : _nuevoProducto,
                     );
                   }
 
@@ -185,7 +187,7 @@ class _ProductosPageState extends ConsumerState<ProductosPage> {
               padding: const EdgeInsets.only(bottom: 4),
               child: FloatingActionButton(
                 heroTag: 'fab-nuevo-producto',
-                onPressed: () => context.push(Rutas.productoNuevo),
+                onPressed: _nuevoProducto,
                 tooltip: 'Nuevo producto',
                 child: const Icon(Icons.add_rounded),
               ),
@@ -193,6 +195,13 @@ class _ProductosPageState extends ConsumerState<ProductosPage> {
           : null,
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
+  }
+
+  /// Antes de abrir el formulario se pregunta al servidor por el cupo del
+  /// plan (o se usa el último conocido sin red).
+  Future<void> _nuevoProducto() async {
+    if (!await hayCupo(context, ref, RecursoLimitado.productos)) return;
+    if (mounted) await context.push(Rutas.productoNuevo);
   }
 
   void _hojaAcciones(BuildContext context, ProductoConCategoria item, bool esAdmin) {

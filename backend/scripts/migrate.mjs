@@ -11,14 +11,17 @@
  *  3. No exige tener el cliente `mysql` instalado (aquí no lo hay).
  *
  * Uso:
- *   node scripts/migrate.mjs            aplica el esquema (idempotente)
+ *   node scripts/migrate.mjs            aplica lo que falte (cada archivo corre una vez,
+ *                                       anotado en `schema_migraciones`)
+ *   node scripts/migrate.mjs --todas    re-ejecuta todos los archivos
  *   node scripts/migrate.mjs --drop     BORRA todo y lo recrea
  *   node scripts/migrate.mjs --dry-run  sólo lista las sentencias
  */
 import 'dotenv/config';
 import mysql from 'mysql2/promise';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, relative, sep } from 'node:path';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { fileURLToPath } from 'node:url';
 import readline from 'node:readline/promises';
@@ -31,6 +34,19 @@ const args = new Set(process.argv.slice(2));
 const DROP = args.has('--drop');
 const DRY = args.has('--dry-run');
 const FORZAR = args.has('--yes') || args.has('-y');
+const TODAS = args.has('--todas');
+
+/**
+ * Nombre con el que se registra un archivo: `schema.sql`, `migrations/004_x.sql`
+ * o, para las de otra app, `<carpeta padre>/<archivo>` (p. ej.
+ * `CONTROL PERSONAL/002_plataforma.sql`).
+ */
+function claveMigracion(archivo) {
+  const rel = relative(DIR_DB, archivo).split(sep).join('/');
+  if (!rel.startsWith('..')) return rel;
+  const partes = archivo.split(sep);
+  return `${partes[partes.length - 3]}/${partes[partes.length - 1]}`;
+}
 
 const c = {
   reset: '\x1b[0m',
@@ -162,6 +178,19 @@ async function main() {
       archivos.push(join(dirMigraciones, f));
     }
   }
+  // Migraciones de otras apps que comparten la base (Control de Personal):
+  // DB_MIGRACIONES_EXTRA=../../CONTROL PERSONAL/database  (varias, separadas por «;»).
+  // Van DESPUÉS de las propias porque dependen de `sedes`, `usuarios` y `empresas`.
+  for (const dir of (process.env.DB_MIGRACIONES_EXTRA ?? '').split(';').map((d) => d.trim()).filter(Boolean)) {
+    const ruta = resolve(RAIZ, 'backend', dir);
+    if (!existsSync(ruta)) {
+      console.error(`${c.red}DB_MIGRACIONES_EXTRA: no existe ${ruta}${c.reset}`);
+      process.exit(1);
+    }
+    for (const f of readdirSync(ruta).filter((f) => f.endsWith('.sql')).sort()) {
+      archivos.push(join(ruta, f));
+    }
+  }
 
   if (DRY) {
     for (const archivo of archivos) {
@@ -205,9 +234,36 @@ async function main() {
     await borrarTodo(conn, cfg.database);
   }
 
+  // Registro de lo aplicado. Hasta la 003 todas las migraciones se re-ejecutaban
+  // en cada corrida; con varias empresas eso ya no es inocuo (la 002 asigna lo
+  // que no tiene sede a «la» sede principal, y ahora hay una por empresa). Cada
+  // archivo corre UNA vez. En una base anterior a este registro se ejecuta todo
+  // una última vez —son idempotentes— y queda anotado.
+  await conn.query(
+    `CREATE TABLE IF NOT EXISTS schema_migraciones (
+       archivo     VARCHAR(191) NOT NULL,
+       sha256      CHAR(64) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+       aplicada_en DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+       PRIMARY KEY (archivo)
+     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  );
+  const [registradas] = await conn.query('SELECT archivo, sha256 FROM schema_migraciones');
+  const aplicadas = new Map(registradas.map((r) => [r.archivo, r.sha256]));
+
   let total = 0;
   for (const archivo of archivos) {
-    const sentencias = partirSql(readFileSync(archivo, 'utf8'));
+    const contenido = readFileSync(archivo, 'utf8');
+    const clave = claveMigracion(archivo);
+    const huella = createHash('sha256').update(contenido).digest('hex');
+    if (aplicadas.has(clave) && !TODAS) {
+      if (aplicadas.get(clave) !== huella) {
+        console.log(`${c.yellow}  ! ${clave} cambió después de aplicarse; no se re-ejecuta (usa --todas si es a propósito)${c.reset}`);
+      } else {
+        console.log(`${c.dim}  · ${clave} ya aplicada${c.reset}`);
+      }
+      continue;
+    }
+    const sentencias = partirSql(contenido);
     console.log(`\n${c.cyan}${archivo.replace(RAIZ, '.')}${c.reset} (${sentencias.length})`);
 
     for (let i = 0; i < sentencias.length; i += 1) {
@@ -224,6 +280,11 @@ async function main() {
         process.exit(1);
       }
     }
+    await conn.query(
+      `INSERT INTO schema_migraciones (archivo, sha256) VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE sha256 = VALUES(sha256), aplicada_en = CURRENT_TIMESTAMP(3)`,
+      [clave, huella],
+    );
   }
 
   const [tablas] = await conn.query(

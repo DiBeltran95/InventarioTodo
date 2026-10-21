@@ -7,6 +7,7 @@ import { TIPOS_MOVIMIENTO } from '../../config/constants.js';
 import { env } from '../../config/env.js';
 import { diaHabil } from '../../utils/dates.js';
 import { toQty, fromQty } from '../../utils/money.js';
+import { exigirEmpresa } from '../sedes/repo.js';
 
 /**
  * Bloquea la fila del producto y devuelve su estado actual.
@@ -19,19 +20,19 @@ import { toQty, fromQty } from '../../utils/money.js';
  * `id` — ver `bloquearProductos` — o dos transacciones que los tomen en orden
  * distinto se interbloquearán.
  */
-export async function bloquearProducto(conn, productoUuid) {
+export async function bloquearProducto(conn, productoUuid, empresaId) {
   const producto = await txQueryOne(
     conn,
     `SELECT id, uuid, sku, nombre, stock_actual, precio_compra, precio_venta, tasa_iva
-       FROM productos WHERE uuid = ? AND deleted_at IS NULL FOR UPDATE`,
-    [productoUuid],
+       FROM productos WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL FOR UPDATE`,
+    [productoUuid, exigirEmpresa(empresaId)],
   );
   if (!producto) throw notFound(`Producto ${productoUuid}`);
   return producto;
 }
 
 /** Bloquea varios productos en orden determinista para no provocar deadlocks. */
-export async function bloquearProductos(conn, uuids) {
+export async function bloquearProductos(conn, uuids, empresaId) {
   const unicos = [...new Set(uuids)];
   if (!unicos.length) return new Map();
 
@@ -41,10 +42,10 @@ export async function bloquearProductos(conn, uuids) {
     .query(
       `SELECT id, uuid, sku, nombre, stock_actual, precio_compra, precio_venta, tasa_iva
          FROM productos
-        WHERE uuid IN (${marcadores}) AND deleted_at IS NULL
+        WHERE uuid IN (${marcadores}) AND empresa_id = ? AND deleted_at IS NULL
         ORDER BY id
           FOR UPDATE`,
-      unicos,
+      [...unicos, exigirEmpresa(empresaId)],
     )
     .then(([r]) => r);
 
@@ -120,14 +121,22 @@ export async function insertarMovimiento(conn, producto, datos, ctx) {
   const uuid = datos.uuid ?? nuevoUuid();
 
   // Idempotencia: reenvío de la cola offline con el mismo uuid de movimiento.
-  const yaExiste = await txQueryOne(conn, 'SELECT id FROM movimientos_inventario WHERE uuid = ?', [uuid]);
+  const yaExiste = await txQueryOne(
+    conn,
+    `SELECT m.id FROM movimientos_inventario m JOIN sedes s ON s.id = m.sede_id
+      WHERE m.uuid = ? AND s.empresa_id = ?`,
+    [uuid, exigirEmpresa(ctx?.empresaId)],
+  );
   if (yaExiste) {
     return { uuid, id: yaExiste.id, duplicado: true, stock_resultante: fromQty(stockPrevio), sede_id: sedeId };
   }
 
   let proveedorId = null;
   if (datos.proveedor_uuid) {
-    const prov = await txQueryOne(conn, 'SELECT id FROM proveedores WHERE uuid = ?', [datos.proveedor_uuid]);
+    const prov = await txQueryOne(conn, 'SELECT id FROM proveedores WHERE uuid = ? AND empresa_id = ?', [
+      datos.proveedor_uuid,
+      exigirEmpresa(ctx?.empresaId),
+    ]);
     if (!prov) throw badRequest('PROVEEDOR_INVALIDO', 'El proveedor indicado no existe');
     proveedorId = prov.id;
   }
@@ -210,7 +219,7 @@ export async function registrarAlerta(conn, { tipo, severidad, productoId, venta
 
 /** Entrada/salida/merma/devolución manual sobre un producto. */
 export async function crearMovimiento(conn, datos, ctx) {
-  const producto = await bloquearProducto(conn, datos.producto_uuid);
+  const producto = await bloquearProducto(conn, datos.producto_uuid, ctx.empresaId);
   const resultado = await insertarMovimiento(conn, producto, datos, ctx);
 
   // El costo de compra se actualiza con la última entrada: es el criterio que
@@ -260,7 +269,7 @@ export async function crearMovimiento(conn, datos, ctx) {
  * se calcula mal.
  */
 export async function ajustarPorConteo(conn, datos, ctx) {
-  const producto = await bloquearProducto(conn, datos.producto_uuid);
+  const producto = await bloquearProducto(conn, datos.producto_uuid, ctx.empresaId);
   const sedeId = datos.sede_id ?? ctx?.sedeId;
   // Contra el stock de ESTA sede: el conteo físico es de los estantes de aquí.
   const actual = toQty(await stockEnSede(conn, producto.id, sedeId));
@@ -310,9 +319,10 @@ export async function ajustarPorConteo(conn, datos, ctx) {
 
 // ── Lecturas ────────────────────────────────────────────────────────────────
 
-export async function listarMovimientos(filtros) {
-  const where = [];
-  const params = [];
+export async function listarMovimientos(filtros, alcance) {
+  // Las sedes del alcance ya son todas de la empresa (también las del director).
+  const where = ['m.sede_id IN (?)'];
+  const params = [alcance.sedeIds.length ? alcance.sedeIds : [0]];
 
   if (filtros.producto) {
     where.push('p.uuid = ?');
@@ -335,7 +345,7 @@ export async function listarMovimientos(filtros) {
     params.push(filtros.proveedor);
   }
 
-  const sqlWhere = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const sqlWhere = `WHERE ${where.join(' AND ')}`;
   const offset = (filtros.pagina - 1) * filtros.limite;
 
   const [items, [conteo]] = await Promise.all([
@@ -368,7 +378,7 @@ export async function listarMovimientos(filtros) {
   return { items, total: Number(conteo.total) };
 }
 
-export async function listarAlertas({ resueltas = false, limite = 100 } = {}) {
+export async function listarAlertas({ resueltas = false, limite = 100 } = {}, alcance) {
   return query(
     `SELECT a.uuid, a.tipo, a.severidad, a.mensaje, a.detalle, a.created_at, a.resuelta_en,
             p.uuid AS producto_uuid, p.nombre AS producto_nombre, p.sku,
@@ -377,14 +387,18 @@ export async function listarAlertas({ resueltas = false, limite = 100 } = {}) {
        LEFT JOIN productos p ON p.id = a.producto_id
        LEFT JOIN ventas v ON v.id = a.venta_id
       WHERE a.resuelta_en IS ${resueltas ? 'NOT NULL' : 'NULL'}
+        AND a.sede_id IN (?)
       ORDER BY FIELD(a.severidad,'CRITICA','ADVERTENCIA','INFO'), a.created_at DESC
       LIMIT ?`,
-    [limite],
+    [alcance.sedeIds.length ? alcance.sedeIds : [0], limite],
   );
 }
 
-export async function resolverAlerta(conn, uuid, usuarioId) {
-  const alerta = await txQueryOne(conn, 'SELECT id FROM alertas WHERE uuid = ?', [uuid]);
+export async function resolverAlerta(conn, uuid, usuarioId, alcance) {
+  const alerta = await txQueryOne(conn, 'SELECT id FROM alertas WHERE uuid = ? AND sede_id IN (?)', [
+    uuid,
+    alcance.sedeIds.length ? alcance.sedeIds : [0],
+  ]);
   if (!alerta) throw notFound('Alerta');
   await txExecute(
     conn,
@@ -394,8 +408,17 @@ export async function resolverAlerta(conn, uuid, usuarioId) {
   return { uuid, resuelta: true };
 }
 
-/** Reconstruye la proyección de stock desde el libro. Red de seguridad. */
-export async function recalcularStock(productoUuid = null) {
-  await query('CALL sp_recalcular_stock(?)', [productoUuid ?? '']);
-  return { recalculado: productoUuid ?? 'todos' };
+/**
+ * Reconstruye la proyección de stock desde el libro. Red de seguridad.
+ * El procedimiento recalcula «todo» con '' : aquí nunca se le pasa vacío, para
+ * que una empresa no recalcule (ni bloquee) el stock de las demás; «todos» son
+ * los productos de la empresa, uno por uno.
+ */
+export async function recalcularStock(productoUuid = null, empresaId) {
+  const uuids = productoUuid
+    ? (await query('SELECT uuid FROM productos WHERE uuid = ? AND empresa_id = ?', [productoUuid, exigirEmpresa(empresaId)]))
+    : await query('SELECT uuid FROM productos WHERE empresa_id = ?', [exigirEmpresa(empresaId)]);
+  if (productoUuid && !uuids.length) throw notFound('Producto');
+  for (const { uuid } of uuids) await query('CALL sp_recalcular_stock(?)', [uuid]);
+  return { recalculado: productoUuid ?? 'todos', productos: uuids.length };
 }

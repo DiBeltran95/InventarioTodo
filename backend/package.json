@@ -18,7 +18,8 @@
     "smoke": "node scripts/smoke.mjs",
     "lint:tx": "node scripts/lint-tx.mjs",
     "test": "node --test",
-    "verify": "npm run lint:tx && npm test && npm run db:check"
+    "verify": "npm run lint:tx && npm run lint:tenant && npm test && npm run db:check",
+    "lint:tenant": "node scripts/lint-tenant.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
@@ -31,6 +32,7 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.1",
     "mysql2": "^3.14.1",
+    "nodemailer": "^6.9.16",
     "pino": "^9.7.0",
     "pino-http": "^10.4.0",
     "uuid": "^11.1.0",

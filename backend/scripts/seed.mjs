@@ -7,9 +7,13 @@
  * producto aún no tiene movimientos — así una segunda ejecución no infla el
  * inventario.
  *
+ * Plataforma multiempresa: crea el superadministrador (sin empresa) y una
+ * «Tienda Demo» registrada igual que desde la app (sp_registrar_empresa), con
+ * plan ILIMITADO y las dos apps habilitadas, más su catálogo de ejemplo.
+ *
  * Uso:
  *   node scripts/seed.mjs
- *   node scripts/seed.mjs --password "MiClaveSegura"
+ *   node scripts/seed.mjs --password "MiClaveSegura" --password-super "OtraClave"
  */
 import 'dotenv/config';
 import mysql from 'mysql2/promise';
@@ -22,6 +26,8 @@ const args = process.argv.slice(2);
 const idxPass = args.indexOf('--password');
 const PASSWORD_ADMIN = idxPass >= 0 ? args[idxPass + 1] : 'Admin1234';
 const PASSWORD_VENDEDOR = 'Vendedor1234';
+const idxSuper = args.indexOf('--password-super');
+const PASSWORD_SUPER = idxSuper >= 0 ? args[idxSuper + 1] : 'Super1234';
 
 const conn = await mysql.createConnection({
   host: process.env.DB_HOST,
@@ -40,20 +46,6 @@ await conn.query(
 );
 
 const hash = (p) => argon2.hash(p, { memoryCost: 19_456, timeCost: 2, parallelism: 1 });
-
-// ── Configuración ────────────────────────────────────────────────────────────
-const CONFIG = [
-  ['nombre_negocio', 'Mi Tienda', 'STRING', 'Nombre que aparece en el ticket'],
-  ['nit', '900123456-7', 'STRING', 'NIT o identificación fiscal'],
-  ['direccion', 'Calle 10 # 5-23, Popayán', 'STRING', null],
-  ['telefono', '3001234567', 'STRING', null],
-  ['moneda', 'COP', 'STRING', null],
-  ['zona_horaria', process.env.BUSINESS_TIMEZONE ?? 'America/Bogota', 'STRING', null],
-  ['iva_por_defecto', '19.00', 'DECIMAL', 'Tasa aplicada a productos nuevos'],
-  ['permitir_stock_negativo', 'true', 'BOOL', 'Acepta sobreventa offline y genera alerta'],
-  ['ticket_pie', '¡Gracias por su compra!', 'STRING', null],
-  ['offline_grace_days', String(process.env.OFFLINE_GRACE_DAYS ?? 7), 'INT', 'Días que la app opera sin ver el servidor'],
-];
 
 // ── Catálogo de ejemplo ──────────────────────────────────────────────────────
 const CATEGORIAS = [
@@ -88,96 +80,111 @@ const PRODUCTOS = [
 
 console.log(`${c.cyan}Sembrando ${process.env.DB_NAME}...${c.reset}\n`);
 
+const uno = async (sql, p = []) => (await conn.query(sql, p))[0][0] ?? null;
+
 await conn.beginTransaction();
+let empresaId;
 try {
-  // 1. Configuración
-  for (const [clave, valor, tipo, descripcion] of CONFIG) {
+  // 1. Superadministrador de la plataforma: no pertenece a ninguna empresa.
+  if (!(await uno('SELECT id FROM usuarios WHERE email = ?', ['superadmin@plataforma.local']))) {
     await conn.query(
-      `INSERT INTO configuracion (clave, valor, tipo, descripcion) VALUES (?,?,?,?)
-       ON DUPLICATE KEY UPDATE descripcion = VALUES(descripcion)`,
-      [clave, valor, tipo, descripcion],
+      `INSERT INTO usuarios (uuid, empresa_id, nombre, email, password_hash, rol, rol_asistencia, es_superadmin)
+       VALUES (?, NULL, 'Superadministrador', 'superadmin@plataforma.local', ?, NULL, NULL, 1)`,
+      [uuidv7(), await hash(PASSWORD_SUPER)],
     );
+    console.log(`  ${c.green}✓${c.reset} Superadministrador`);
   }
-  console.log(`  ${c.green}✓${c.reset} ${CONFIG.length} claves de configuración`);
 
-  // 2. Usuarios
-  const usuarios = [
-    ['Administrador', 'admin@inventario.local', PASSWORD_ADMIN, 'ADMIN'],
-    ['Vendedor', 'vendedor@inventario.local', PASSWORD_VENDEDOR, 'VENDEDOR'],
-  ];
-  let adminId = null;
-  for (const [nombre, email, pass, rol] of usuarios) {
-    const [existe] = await conn.query('SELECT id FROM usuarios WHERE email = ?', [email]);
-    if (existe.length) {
-      if (rol === 'ADMIN') adminId = existe[0].id;
-      console.log(`  ${c.dim}·${c.reset} ${email} ya existía (contraseña sin cambios)`);
-      continue;
-    }
+  // 2. Empresa de demostración, registrada como lo haría la app.
+  const admin = await uno('SELECT id, empresa_id FROM usuarios WHERE email = ?', ['admin@inventario.local']);
+  if (admin) {
+    empresaId = admin.empresa_id;
+    console.log(`  ${c.dim}·${c.reset} Tienda Demo ya existía (contraseñas sin cambios)`);
+  } else {
+    const [res] = await conn.query('CALL sp_registrar_empresa(?,?,?,?,?,?,?,?,?,?,?,?)', [
+      uuidv7(), 'Tienda Demo', '900123456-7', '3001234567',
+      uuidv7(), 'Sede principal', 'PRI',
+      uuidv7(), 'Administrador', 'admin@inventario.local', await hash(PASSWORD_ADMIN), 'INVENTARIO',
+    ]);
+    empresaId = res[0].empresa_id;
+    // Sin límites y con las dos apps: es para probar todo.
+    await conn.query(
+      "UPDATE empresas SET plan_id = (SELECT id FROM planes WHERE codigo = 'ILIMITADO') WHERE id = ?",
+      [empresaId],
+    );
+    await conn.query(
+      "INSERT IGNORE INTO empresa_aplicativos (empresa_id, aplicativo) VALUES (?, 'ASISTENCIA')",
+      [empresaId],
+    );
+    await conn.query(
+      "UPDATE empresa_configuracion SET valor = 'Calle 10 # 5-23, Popayán' WHERE empresa_id = ? AND clave = 'direccion'",
+      [empresaId],
+    );
+    console.log(`  ${c.green}✓${c.reset} Tienda Demo (plan ILIMITADO, Inventario + Control de Personal)`);
+  }
+  const sede = await uno('SELECT id FROM sedes WHERE empresa_id = ? AND es_principal = 1', [empresaId]);
+  const adminId = (await uno('SELECT id FROM usuarios WHERE email = ?', ['admin@inventario.local'])).id;
+
+  // 3. Vendedor de la sede principal.
+  if (!(await uno('SELECT id FROM usuarios WHERE email = ?', ['vendedor@inventario.local']))) {
     const [r] = await conn.query(
-      'INSERT INTO usuarios (uuid, nombre, email, password_hash, rol) VALUES (?,?,?,?,?)',
-      [uuidv7(), nombre, email, await hash(pass), rol],
+      `INSERT INTO usuarios (uuid, empresa_id, nombre, email, password_hash, rol)
+       VALUES (?, ?, 'Vendedor', 'vendedor@inventario.local', ?, 'VENDEDOR')`,
+      [uuidv7(), empresaId, await hash(PASSWORD_VENDEDOR)],
     );
-    if (rol === 'ADMIN') adminId = r.insertId;
-    // El vendedor pertenece a una sede: la principal, que crea la migración 002.
-    // El director no tiene sedes (las ve todas).
-    if (rol !== 'ADMIN') {
-      await conn.query(
-        `INSERT IGNORE INTO usuario_sedes (usuario_id, sede_id)
-         SELECT ?, id FROM sedes WHERE es_principal = 1 AND deleted_at IS NULL ORDER BY id LIMIT 1`,
-        [r.insertId],
-      );
-    }
-    console.log(`  ${c.green}✓${c.reset} Usuario ${email} (${rol})`);
+    await conn.query('INSERT IGNORE INTO usuario_sedes (usuario_id, sede_id) VALUES (?, ?)', [r.insertId, sede.id]);
+    console.log(`  ${c.green}✓${c.reset} Usuario vendedor@inventario.local (VENDEDOR)`);
   }
 
-  // 3. Categorías
+  // 4. Categorías
   const idCategoria = new Map();
   for (const cat of CATEGORIAS) {
-    const [existe] = await conn.query('SELECT id FROM categorias WHERE nombre = ?', [cat.nombre]);
-    if (existe.length) {
-      idCategoria.set(cat.nombre, existe[0].id);
+    const existe = await uno('SELECT id FROM categorias WHERE empresa_id = ? AND nombre = ?', [empresaId, cat.nombre]);
+    if (existe) {
+      idCategoria.set(cat.nombre, existe.id);
       continue;
     }
     const [r] = await conn.query(
-      'INSERT INTO categorias (uuid, nombre, color, icono, orden) VALUES (?,?,?,?,?)',
-      [uuidv7(), cat.nombre, cat.color, cat.icono, cat.orden],
+      'INSERT INTO categorias (uuid, empresa_id, nombre, color, icono, orden) VALUES (?,?,?,?,?,?)',
+      [uuidv7(), empresaId, cat.nombre, cat.color, cat.icono, cat.orden],
     );
     idCategoria.set(cat.nombre, r.insertId);
   }
   console.log(`  ${c.green}✓${c.reset} ${CATEGORIAS.length} categorías`);
 
-  // 4. Proveedores
+  // 5. Proveedores
   for (const p of PROVEEDORES) {
+    if (await uno('SELECT id FROM proveedores WHERE empresa_id = ? AND nombre = ?', [empresaId, p.nombre])) continue;
     await conn.query(
-      `INSERT INTO proveedores (uuid, nombre, nit, contacto, telefono) VALUES (?,?,?,?,?)
-       ON DUPLICATE KEY UPDATE nombre = VALUES(nombre)`,
-      [uuidv7(), p.nombre, p.nit, p.contacto, p.telefono],
+      'INSERT INTO proveedores (uuid, empresa_id, nombre, nit, contacto, telefono) VALUES (?,?,?,?,?,?)',
+      [uuidv7(), empresaId, p.nombre, p.nit, p.contacto, p.telefono],
     );
   }
   console.log(`  ${c.green}✓${c.reset} ${PROVEEDORES.length} proveedores`);
 
-  // 5. Productos + códigos + stock inicial
+  // 6. Productos + códigos + stock inicial en la sede principal
   let creados = 0;
   let conStock = 0;
   for (const [sku, nombre, categoria, compra, venta, iva, stock, minimo, unidad, ean] of PRODUCTOS) {
-    const [existe] = await conn.query('SELECT id FROM productos WHERE sku = ?', [sku]);
+    const existe = await uno('SELECT id FROM productos WHERE empresa_id = ? AND sku = ?', [empresaId, sku]);
     let productoId;
 
-    if (existe.length) {
-      productoId = existe[0].id;
+    if (existe) {
+      productoId = existe.id;
     } else {
       const [r] = await conn.query(
         `INSERT INTO productos
-           (uuid, sku, nombre, categoria_id, unidad_medida, precio_compra, precio_venta,
+           (uuid, empresa_id, sku, nombre, categoria_id, unidad_medida, precio_compra, precio_venta,
             tasa_iva, stock_minimo)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
-        [uuidv7(), sku, nombre, idCategoria.get(categoria), unidad, compra, venta, iva, minimo],
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [uuidv7(), empresaId, sku, nombre, idCategoria.get(categoria), unidad, compra, venta, iva, minimo],
       );
       productoId = r.insertId;
       creados += 1;
     }
 
     if (ean) {
+      // La empresa del código la pone el trigger (la de su producto).
       await conn.query(
         `INSERT INTO producto_codigos (uuid, producto_id, codigo, tipo, es_principal)
          VALUES (?,?,?, 'EAN13', 1)
@@ -188,16 +195,13 @@ try {
 
     // Stock inicial sólo si el producto no tiene historial: así reejecutar el
     // seed no duplica existencias.
-    const [movs] = await conn.query(
-      'SELECT COUNT(*) n FROM movimientos_inventario WHERE producto_id = ?',
-      [productoId],
-    );
-    if (Number(movs[0].n) === 0) {
+    const movs = await uno('SELECT COUNT(*) n FROM movimientos_inventario WHERE producto_id = ?', [productoId]);
+    if (Number(movs.n) === 0) {
       await conn.query(
         `INSERT INTO movimientos_inventario
-           (uuid, producto_id, tipo, cantidad, costo_unitario, usuario_id, motivo, fecha, fecha_local)
-         VALUES (?,?, 'INICIAL', ?,?,?, 'Carga inicial del catálogo', UTC_TIMESTAMP(3), UTC_DATE())`,
-        [uuidv7(), productoId, stock, compra, adminId],
+           (uuid, producto_id, sede_id, tipo, cantidad, costo_unitario, usuario_id, motivo, fecha, fecha_local)
+         VALUES (?,?,?, 'INICIAL', ?,?,?, 'Carga inicial del catálogo', UTC_TIMESTAMP(3), UTC_DATE())`,
+        [uuidv7(), productoId, sede.id, stock, compra, adminId],
       );
       conStock += 1;
     }
@@ -212,20 +216,24 @@ try {
   process.exit(1);
 }
 
-const [[resumen]] = await conn.query(`
-  SELECT (SELECT COUNT(*) FROM productos WHERE deleted_at IS NULL) p,
-         (SELECT COUNT(*) FROM categorias WHERE deleted_at IS NULL) c,
-         (SELECT COUNT(*) FROM usuarios WHERE deleted_at IS NULL) u,
-         (SELECT COALESCE(SUM(stock_actual * precio_compra),0) FROM productos WHERE deleted_at IS NULL) v`);
+const [[resumen]] = await conn.query(
+  `SELECT (SELECT COUNT(*) FROM productos WHERE empresa_id = ? AND deleted_at IS NULL) p,
+          (SELECT COUNT(*) FROM categorias WHERE empresa_id = ? AND deleted_at IS NULL) c,
+          (SELECT COUNT(*) FROM usuarios WHERE empresa_id = ? AND deleted_at IS NULL) u,
+          (SELECT COALESCE(SUM(stock_actual * precio_compra),0) FROM productos
+            WHERE empresa_id = ? AND deleted_at IS NULL) v`,
+  [empresaId, empresaId, empresaId, empresaId],
+);
 
 console.log(`
-${c.green}Listo.${c.reset}
+${c.green}Listo.${c.reset} Tienda Demo
   Productos: ${resumen.p}   Categorías: ${resumen.c}   Usuarios: ${resumen.u}
   Valor del inventario a costo: $${Number(resumen.v).toLocaleString('es-CO')}
 
 ${c.yellow}Credenciales de acceso${c.reset}
-  admin@inventario.local     ${PASSWORD_ADMIN}      (ADMIN)
-  vendedor@inventario.local  ${PASSWORD_VENDEDOR}   (VENDEDOR)
+  superadmin@plataforma.local  ${PASSWORD_SUPER}     (panel de plataforma)
+  admin@inventario.local       ${PASSWORD_ADMIN}      (ADMIN en las dos apps)
+  vendedor@inventario.local    ${PASSWORD_VENDEDOR}   (VENDEDOR)
 
   ${c.dim}Cámbialas antes de usar esto con datos reales.${c.reset}
 `);

@@ -24,7 +24,11 @@ const TIPOS = ['CONTEO', 'MERMA', 'AJUSTE'];
 
 export async function solicitarAjuste(conn, p, ctx) {
   const uuid = p.uuid ?? nuevoUuid();
-  const existente = await txQueryOne(conn, 'SELECT uuid, estado FROM solicitudes_ajuste WHERE uuid = ?', [uuid]);
+  const existente = await txQueryOne(
+    conn,
+    'SELECT uuid, estado FROM solicitudes_ajuste WHERE uuid = ? AND sede_id IN (?)',
+    [uuid, ctx.alcance.sedeIds.length ? ctx.alcance.sedeIds : [0]],
+  );
   if (existente) return { uuid, estado: existente.estado, duplicado: true };
 
   if (!TIPOS.includes(p.tipo)) throw badRequest('TIPO_INVALIDO', 'Tipo de ajuste inválido');
@@ -41,9 +45,11 @@ export async function solicitarAjuste(conn, p, ctx) {
     throw forbidden('Sólo puedes pedir ajustes en tu sede', 'SEDE_FUERA_DE_ALCANCE');
   }
 
-  const producto = await txQueryOne(conn, 'SELECT id, uuid, nombre FROM productos WHERE uuid = ? AND deleted_at IS NULL', [
-    p.producto_uuid,
-  ]);
+  const producto = await txQueryOne(
+    conn,
+    'SELECT id, uuid, nombre FROM productos WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL',
+    [p.producto_uuid, ctx.empresaId],
+  );
   if (!producto) throw notFound('Producto');
 
   await txExecute(
@@ -83,14 +89,14 @@ export async function solicitarAjuste(conn, p, ctx) {
   return { uuid, estado: 'PENDIENTE' };
 }
 
-async function bloquearSolicitud(conn, uuid) {
+async function bloquearSolicitud(conn, uuid, ctx) {
   const s = await txQueryOne(
     conn,
     `SELECT sa.id, sa.uuid, sa.sede_id, sa.tipo, sa.cantidad, sa.stock_contado, sa.motivo, sa.estado,
             sa.solicitado_por, sa.resuelto_por, p.uuid AS producto_uuid, p.nombre AS producto
        FROM solicitudes_ajuste sa JOIN productos p ON p.id = sa.producto_id
-      WHERE sa.uuid = ? FOR UPDATE`,
-    [uuid],
+      WHERE sa.uuid = ? AND sa.sede_id IN (?) FOR UPDATE`,
+    [uuid, ctx.alcance.sedeIds.length ? ctx.alcance.sedeIds : [0]],
   );
   if (!s) throw notFound('Solicitud de ajuste');
   return s;
@@ -109,7 +115,7 @@ function exigirResolvible(s, ctx) {
 }
 
 export async function aprobarAjuste(conn, p, ctx) {
-  const s = await bloquearSolicitud(conn, p.uuid);
+  const s = await bloquearSolicitud(conn, p.uuid, ctx);
   if (s.estado === 'APROBADA' && Number(s.resuelto_por) === Number(ctx.usuarioId)) {
     return { uuid: s.uuid, estado: s.estado, duplicado: true };
   }
@@ -139,7 +145,7 @@ export async function aprobarAjuste(conn, p, ctx) {
       ctxMov,
     );
   } else {
-    const producto = await bloquearProducto(conn, s.producto_uuid);
+    const producto = await bloquearProducto(conn, s.producto_uuid, ctx.empresaId);
     movimiento = await insertarMovimiento(
       conn,
       producto,
@@ -149,7 +155,8 @@ export async function aprobarAjuste(conn, p, ctx) {
   }
 
   const movimientoId = movimiento?.uuid
-    ? (await txQueryOne(conn, 'SELECT id FROM movimientos_inventario WHERE uuid = ?', [movimiento.uuid]))?.id
+    ? // aislamiento: el movimiento que esta misma operación acaba de crear
+    (await txQueryOne(conn, 'SELECT id FROM movimientos_inventario WHERE uuid = ?', [movimiento.uuid]))?.id
     : null;
 
   await txExecute(
@@ -175,7 +182,7 @@ export async function aprobarAjuste(conn, p, ctx) {
 }
 
 export async function rechazarAjuste(conn, p, ctx) {
-  const s = await bloquearSolicitud(conn, p.uuid);
+  const s = await bloquearSolicitud(conn, p.uuid, ctx);
   if (s.estado === 'RECHAZADA' && Number(s.resuelto_por) === Number(ctx.usuarioId)) {
     return { uuid: s.uuid, estado: s.estado, duplicado: true };
   }

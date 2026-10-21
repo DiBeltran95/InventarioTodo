@@ -20,6 +20,10 @@
 -- ============================================================================
 
 SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- La base hereda su collation a las funciones y procedimientos (sus parámetros
+-- VARCHAR). Los hostings la crean con utf8mb4_general_ci y las tablas son
+-- utf8mb4_unicode_ci: comparar ambas falla con «Illegal mix of collations».
+ALTER DATABASE CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
 SET FOREIGN_KEY_CHECKS = 0;
 

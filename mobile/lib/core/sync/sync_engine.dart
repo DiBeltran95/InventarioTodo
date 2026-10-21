@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
 
+import '../../features/cuenta/domain/plan.dart';
 import '../config/app_config.dart';
 import '../database/app_database.dart';
 import '../database/daos/metodos_pago_dao.dart';
@@ -412,6 +413,9 @@ class SyncEngine extends ChangeNotifier {
       final entidades = datos['entidades'] as Map<String, dynamic>;
 
       await _sync.registrarHoraServidor(datos['servidor_utc'] as String?);
+      // Plan y uso de la empresa: con la última copia se avisa del límite
+      // antes de abrir un formulario, también sin red.
+      await PlanLocal.guardar(datos['plan']);
 
       // Si el alcance cambió (otra sede, otro rol, o la primera bajada tras
       // actualizar la app), esta página se pidió con cursores que ya no

@@ -87,9 +87,11 @@ async function prepararMetodo(conn, datos, ctx, actual = null) {
     if (datos.sede_uuid === null || datos.sede_uuid === '') {
       salida.sede_id = null;
     } else {
-      const sede = await txQueryOne(conn, 'SELECT id FROM sedes WHERE uuid = ? AND deleted_at IS NULL', [
-        datos.sede_uuid,
-      ]);
+      const sede = await txQueryOne(
+        conn,
+        'SELECT id FROM sedes WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL',
+        [datos.sede_uuid, ctx.empresaId],
+      );
       if (!sede) throw notFound('Sede');
       salida.sede_id = sede.id;
     }
@@ -109,8 +111,11 @@ async function prepararMetodo(conn, datos, ctx, actual = null) {
   return salida;
 }
 
-const metodoActual = (conn, uuid) =>
-  txQueryOne(conn, 'SELECT id, uuid, nombre, sede_id FROM metodos_pago WHERE uuid = ?', [uuid]);
+const metodoActual = (conn, uuid, empresaId) =>
+  txQueryOne(conn, 'SELECT id, uuid, nombre, sede_id FROM metodos_pago WHERE uuid = ? AND empresa_id = ?', [
+    uuid,
+    empresaId,
+  ]);
 
 async function auditar(conn, ctx, uuid, accion, despues) {
   await registrarAuditoria(conn, {
@@ -125,27 +130,27 @@ async function auditar(conn, ctx, uuid, accion, despues) {
 }
 
 export async function guardarMetodo(conn, datos, ctx) {
-  const actual = datos.uuid ? await metodoActual(conn, datos.uuid) : null;
+  const actual = datos.uuid ? await metodoActual(conn, datos.uuid, ctx.empresaId) : null;
   const preparado = await prepararMetodo(conn, datos, ctx, actual);
-  const fila = await repoMetodosPago.crearOActualizar(conn, preparado);
+  const fila = await repoMetodosPago.crearOActualizar(conn, ctx.empresaId, preparado);
   await auditar(conn, ctx, fila.uuid, actual ? 'editar' : 'crear', preparado);
   return fila;
 }
 
 export async function actualizarMetodo(conn, uuid, datos, ctx) {
-  const actual = await metodoActual(conn, uuid);
+  const actual = await metodoActual(conn, uuid, ctx.empresaId);
   if (!actual) throw notFound('Medio de pago');
   const preparado = await prepararMetodo(conn, datos, ctx, actual);
-  const fila = await repoMetodosPago.actualizar(conn, uuid, preparado);
+  const fila = await repoMetodosPago.actualizar(conn, ctx.empresaId, uuid, preparado);
   await auditar(conn, ctx, uuid, 'editar', preparado);
   return fila;
 }
 
 export async function eliminarMetodo(conn, uuid, ctx) {
-  const actual = await metodoActual(conn, uuid);
+  const actual = await metodoActual(conn, uuid, ctx.empresaId);
   if (!actual) throw notFound('Medio de pago');
   await prepararMetodo(conn, {}, ctx, actual);
-  const r = await repoMetodosPago.eliminar(conn, uuid);
+  const r = await repoMetodosPago.eliminar(conn, ctx.empresaId, uuid);
   await auditar(conn, ctx, uuid, 'eliminar', { nombre: actual.nombre });
   return r;
 }
@@ -160,7 +165,7 @@ router.get(
   '/',
   validar({ query: z.object({ buscar: z.string().max(100).optional() }) }),
   asyncHandler(async (req, res) => {
-    const items = await repoMetodosPago.listar({ buscar: req.validated.query.buscar });
+    const items = await repoMetodosPago.listar(req.empresaId, { buscar: req.validated.query.buscar });
     lista(res, items, { total: items.length });
   }),
 );
@@ -168,10 +173,11 @@ router.get(
 router.get(
   '/:uuid',
   validar({ params: paramUuid }),
-  asyncHandler(async (req, res) => ok(res, await repoMetodosPago.obtener(req.params.uuid))),
+  asyncHandler(async (req, res) => ok(res, await repoMetodosPago.obtener(req.empresaId, req.params.uuid))),
 );
 
 const ctxDe = (req) => ({
+  empresaId: req.empresaId,
   usuarioId: req.usuario.id,
   rol: req.usuario.rol,
   alcance: req.alcance,

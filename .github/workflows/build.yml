@@ -54,7 +54,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLUTTER_VERSION: '3.44.1'
+  FLUTTER_VERSION: '3.47.6'
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
@@ -120,15 +120,15 @@ jobs:
         run: |
           mkdir -p Payload
           cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -qr InventarioPOS-${{ github.run_number }}.ipa Payload
+          zip -qr Ventario-${{ github.run_number }}.ipa Payload
           rm -rf Payload
-          ls -lh InventarioPOS-${{ github.run_number }}.ipa
+          ls -lh Ventario-${{ github.run_number }}.ipa
 
       - name: Publicar IPA
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa-${{ github.run_number }}
-          path: mobile/InventarioPOS-${{ github.run_number }}.ipa
+          path: mobile/Ventario-${{ github.run_number }}.ipa
           retention-days: 30
           if-no-files-found: error
 

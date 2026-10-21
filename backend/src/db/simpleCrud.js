@@ -5,47 +5,56 @@
  * Los nombres de tabla y columna vienen SIEMPRE de constantes del código, nunca
  * de la petición, así que la interpolación en el SQL no es una vía de inyección.
  * Los valores van siempre parametrizados.
+ *
+ * Plataforma multiempresa: cada método recibe la empresa y TODA consulta la
+ * filtra por `empresa_id`. Buscar solo por uuid permitiría editar la categoría
+ * de otra empresa con conocer su uuid.
  */
 import { query, queryOne } from './pool.js';
 import { txQueryOne, txExecute } from './tx.js';
 import { nuevoUuid } from '../utils/ids.js';
 import { notFound, badRequest } from '../utils/ApiError.js';
 
+function exigirEmpresa(empresaId) {
+  if (!empresaId) throw new Error('Catálogo sin empresa: falta empresaId');
+  return Number(empresaId);
+}
+
 export function crearRepositorioSimple({ tabla, campos, camposBusqueda = [], orden = 'nombre' }) {
   const columnas = ['uuid', ...campos, 'created_at', 'updated_at'].join(', ');
 
   return {
-    async listar({ buscar = null, incluirEliminados = false } = {}) {
-      const where = [];
-      const params = [];
+    async listar(empresaId, { buscar = null, incluirEliminados = false } = {}) {
+      const where = ['empresa_id = ?'];
+      const params = [exigirEmpresa(empresaId)];
       if (!incluirEliminados) where.push('deleted_at IS NULL');
       if (buscar && camposBusqueda.length) {
         where.push(`(${camposBusqueda.map((c) => `${c} LIKE ?`).join(' OR ')})`);
         camposBusqueda.forEach(() => params.push(`%${buscar}%`));
       }
       const sql = `SELECT ${columnas} FROM ${tabla}
-                   ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+                   WHERE ${where.join(' AND ')}
                    ORDER BY ${orden} LIMIT 1000`;
       return query(sql, params);
     },
 
-    async obtener(uuid) {
+    async obtener(empresaId, uuid) {
       const fila = await queryOne(
-        `SELECT ${columnas} FROM ${tabla} WHERE uuid = ? AND deleted_at IS NULL`,
-        [uuid],
+        `SELECT ${columnas} FROM ${tabla} WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL`,
+        [uuid, exigirEmpresa(empresaId)],
       );
       if (!fila) throw notFound(tabla);
       return fila;
     },
 
-    async crear(conn, datos) {
+    async crear(conn, empresaId, datos) {
       const uuid = datos.uuid ?? nuevoUuid();
       const usados = campos.filter((c) => datos[c] !== undefined);
       await txExecute(
         conn,
-        `INSERT INTO ${tabla} (uuid${usados.length ? `, ${usados.join(', ')}` : ''})
-         VALUES (?${usados.map(() => ', ?').join('')})`,
-        [uuid, ...usados.map((c) => datos[c])],
+        `INSERT INTO ${tabla} (uuid, empresa_id${usados.length ? `, ${usados.join(', ')}` : ''})
+         VALUES (?, ?${usados.map(() => ', ?').join('')})`,
+        [uuid, exigirEmpresa(empresaId), ...usados.map((c) => datos[c])],
       );
       return txQueryOne(conn, `SELECT ${columnas} FROM ${tabla} WHERE uuid = ?`, [uuid]);
     },
@@ -53,18 +62,26 @@ export function crearRepositorioSimple({ tabla, campos, camposBusqueda = [], ord
     /**
      * Upsert idempotente: si el uuid ya existe se actualiza en lugar de fallar.
      * Lo necesita la sincronización, donde un reenvío del mismo alta debe
-     * converger al mismo estado en vez de devolver "duplicado".
+     * converger al mismo estado en vez de devolver "duplicado". Un uuid que
+     * existe en OTRA empresa no se encuentra aquí, y el INSERT choca con la
+     * llave única del uuid: nunca se pisa lo ajeno.
      */
-    async crearOActualizar(conn, datos) {
-      const existe = await txQueryOne(conn, `SELECT id FROM ${tabla} WHERE uuid = ?`, [datos.uuid]);
-      if (existe) return this.actualizar(conn, datos.uuid, datos);
-      return this.crear(conn, datos);
+    async crearOActualizar(conn, empresaId, datos) {
+      const existe = await txQueryOne(conn, `SELECT id FROM ${tabla} WHERE uuid = ? AND empresa_id = ?`, [
+        datos.uuid,
+        exigirEmpresa(empresaId),
+      ]);
+      if (existe) return this.actualizar(conn, empresaId, datos.uuid, datos);
+      return this.crear(conn, empresaId, datos);
     },
 
-    async actualizar(conn, uuid, datos) {
+    async actualizar(conn, empresaId, uuid, datos) {
       const usados = campos.filter((c) => datos[c] !== undefined);
       if (!usados.length) throw badRequest('SIN_CAMBIOS', 'No se envió ningún campo a modificar');
-      const fila = await txQueryOne(conn, `SELECT id FROM ${tabla} WHERE uuid = ?`, [uuid]);
+      const fila = await txQueryOne(conn, `SELECT id FROM ${tabla} WHERE uuid = ? AND empresa_id = ?`, [
+        uuid,
+        exigirEmpresa(empresaId),
+      ]);
       if (!fila) throw notFound(tabla);
       await txExecute(
         conn,
@@ -75,8 +92,11 @@ export function crearRepositorioSimple({ tabla, campos, camposBusqueda = [], ord
     },
 
     /** Borrado lógico: un DELETE físico jamás llegaría al dispositivo offline. */
-    async eliminar(conn, uuid) {
-      const fila = await txQueryOne(conn, `SELECT id FROM ${tabla} WHERE uuid = ?`, [uuid]);
+    async eliminar(conn, empresaId, uuid) {
+      const fila = await txQueryOne(conn, `SELECT id FROM ${tabla} WHERE uuid = ? AND empresa_id = ?`, [
+        uuid,
+        exigirEmpresa(empresaId),
+      ]);
       if (!fila) throw notFound(tabla);
       await txExecute(
         conn,

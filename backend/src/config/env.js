@@ -49,6 +49,15 @@ const schema = z.object({
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   SYNC_PUSH_MAX_OPS: z.coerce.number().int().positive().default(200),
   SYNC_PULL_MAX_ROWS: z.coerce.number().int().positive().default(500),
+
+  // Correo saliente (recuperar la contraseña). Sin SMTP_HOST, en desarrollo el
+  // código se escribe en el log; en producción la recuperación responde 503.
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+  SMTP_SEGURO: bool.default('false'),
+  CORREO_REMITENTE: z.string().default('Plataforma <no-responder@localhost>'),
 });
 
 /**

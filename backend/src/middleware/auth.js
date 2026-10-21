@@ -29,7 +29,52 @@ export function fueraDeHorario(evaluacion) {
 }
 
 /**
- * Verifica el access token y adjunta `req.usuario` y `req.alcance`.
+ * Cuenta con su empresa y el permiso de la empresa sobre Inventario. La usan
+ * el middleware (en cada petición), el login y la renovación del token.
+ */
+export function cargarUsuarioDeSesion(uuid) {
+  return queryOne(
+    `SELECT u.id, u.uuid, u.empresa_id, u.nombre, u.email, u.rol, u.activo,
+            u.restringir_horario, u.horario, u.acceso_extra_hasta,
+            e.estado AS empresa_estado, e.deleted_at AS empresa_borrada,
+            ea.activo AS app_habilitada
+       FROM usuarios u
+       LEFT JOIN empresas e ON e.id = u.empresa_id
+       LEFT JOIN empresa_aplicativos ea ON ea.empresa_id = u.empresa_id AND ea.aplicativo = 'INVENTARIO'
+      WHERE u.uuid = ? AND u.deleted_at IS NULL AND u.es_superadmin = 0`,
+    [uuid],
+  );
+}
+
+/**
+ * Las puertas, en el orden en que conviene explicarlas: cuenta, empresa, app
+ * de la empresa y rol de la persona en esta app. Cada una con su código, para
+ * que la app muestre una pantalla clara y no un error genérico.
+ */
+export function exigirAccesoInventario(usuario) {
+  if (!usuario.activo) throw forbidden('La cuenta está desactivada', 'CUENTA_DESACTIVADA');
+  if (!usuario.empresa_id || usuario.empresa_borrada) {
+    throw forbidden('Tu empresa ya no está registrada en la plataforma', 'EMPRESA_INEXISTENTE');
+  }
+  if (usuario.empresa_estado !== 'ACTIVA') {
+    throw forbidden(
+      'Tu empresa está suspendida. Comunícate con el equipo de la plataforma.',
+      'EMPRESA_SUSPENDIDA',
+    );
+  }
+  if (!usuario.app_habilitada) {
+    throw forbidden('Tu empresa no tiene habilitada la app de Inventario', 'APP_NO_HABILITADA');
+  }
+  if (!usuario.rol) {
+    throw forbidden(
+      'Tu cuenta no tiene acceso a Inventario. Pídeselo al administrador de tu empresa.',
+      'SIN_ACCESO_APP',
+    );
+  }
+}
+
+/**
+ * Verifica el access token y adjunta `req.usuario`, `req.empresaId` y `req.alcance`.
  *
  * Se consulta el usuario en cada petición en lugar de confiar sólo en el
  * payload del JWT: un usuario desactivado, eliminado o que terminó su turno
@@ -58,14 +103,10 @@ const crearAutenticador = (conGracia) =>
       throw unauthorized('Token inválido', 'TOKEN_INVALIDO');
     }
 
-    const usuario = await queryOne(
-      `SELECT id, uuid, nombre, email, rol, activo, restringir_horario, horario, acceso_extra_hasta
-         FROM usuarios WHERE uuid = ? AND deleted_at IS NULL`,
-      [payload.sub],
-    );
+    const usuario = await cargarUsuarioDeSesion(payload.sub);
 
     if (!usuario) throw unauthorized('El usuario ya no existe', 'USUARIO_INEXISTENTE');
-    if (!usuario.activo) throw forbidden('La cuenta está desactivada', 'CUENTA_DESACTIVADA');
+    exigirAccesoInventario(usuario);
 
     const ahora = new Date();
     const jornada = jornadaDe(usuario);
@@ -75,6 +116,7 @@ const crearAutenticador = (conGracia) =>
     if (!permitido) throw fueraDeHorario(evaluarJornada(jornada, ahora, env.BUSINESS_TIMEZONE));
 
     req.usuario = usuario;
+    req.empresaId = Number(usuario.empresa_id);
     req.alcance = await cargarAlcance(usuario);
     req.dispositivoUuid = req.headers['x-dispositivo'] || payload.dispositivo || null;
     next();

@@ -178,6 +178,19 @@ class AjustesPage extends ConsumerWidget {
           _Grupo(
             titulo: 'Cuenta',
             hijos: [
+              // Para todos: el plan se consulta y la cuenta se puede eliminar
+              // desde la app (lo exige Google Play).
+              ListTile(
+                leading: const Icon(Icons.business_center_outlined),
+                title: const Text('Mi empresa'),
+                subtitle: Text(
+                  (sesion?.rol.esDirector ?? false)
+                      ? 'Plan, apps habilitadas y datos de la empresa'
+                      : 'Plan de la empresa y eliminar mi cuenta',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => context.push(Rutas.miEmpresa),
+              ),
               ListTile(
                 leading: const Icon(Icons.password_rounded),
                 title: const Text('Cambiar mi contraseña'),
@@ -198,9 +211,8 @@ class AjustesPage extends ConsumerWidget {
             ],
           ),
 
-          // La app no tiene registro público: es un punto de venta, no una app
-          // de consumo — quien se registrara solo tendría acceso al inventario
-          // del negocio. Las cuentas las crean el director y los gerentes.
+          // El registro público crea EMPRESAS (con su director); las cuentas
+          // del personal las crean el director y los gerentes.
           if (sesion?.rol.esGestor ?? false)
             _Grupo(
               titulo: 'Gestión',

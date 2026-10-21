@@ -35,6 +35,7 @@ import {
 import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
 import { bloquearProductos, insertarMovimiento, stockEnSede } from '../inventario/service.js';
 import { sedePorUuid } from '../sedes/repo.js';
+import { prefijoWeb } from '../cuenta/repo.js';
 
 const usuarioDe = (ctx) => ({ id: ctx.usuarioId, rol: ctx.rol, alcance: ctx.alcance });
 
@@ -46,7 +47,9 @@ async function evento(conn, trasladoId, tipo, ctx, nota = null) {
   );
 }
 
-async function bloquearTraslado(conn, uuid) {
+async function bloquearTraslado(conn, uuid, empresaId) {
+  // Las dos sedes de un traslado son siempre de la misma empresa (crearTraslado
+  // las busca dentro de ella): basta con filtrar por la de origen.
   const t = await txQueryOne(
     conn,
     `SELECT t.id, t.uuid, t.numero, t.estado, t.confirma, t.sede_origen_id, t.sede_destino_id,
@@ -54,9 +57,9 @@ async function bloquearTraslado(conn, uuid) {
        FROM traslados t
        JOIN sedes so ON so.id = t.sede_origen_id
        JOIN sedes sd ON sd.id = t.sede_destino_id
-      WHERE t.uuid = ? AND t.deleted_at IS NULL
+      WHERE t.uuid = ? AND so.empresa_id = ? AND t.deleted_at IS NULL
       FOR UPDATE`,
-    [uuid],
+    [uuid, empresaId],
   );
   if (!t) throw notFound('Traslado');
   return t;
@@ -69,7 +72,7 @@ async function asignarNumero(conn, numero, ctx) {
     ? (await txQueryOne(conn, 'SELECT prefijo_folio FROM dispositivos WHERE uuid = ?', [ctx.dispositivoUuid]))
         ?.prefijo_folio
     : null;
-  const base = `TR-${prefijo ?? 'SRV'}-`;
+  const base = `TR-${prefijo ?? (await prefijoWeb(conn, ctx.empresaId))}-`;
   const fila = await txQueryOne(
     conn,
     `SELECT IFNULL(MAX(CAST(SUBSTRING_INDEX(numero, '-', -1) AS UNSIGNED)), 0) n
@@ -81,13 +84,18 @@ async function asignarNumero(conn, numero, ctx) {
 
 export async function crearTraslado(conn, p, ctx) {
   const uuid = p.uuid ?? nuevoUuid();
-  const existente = await txQueryOne(conn, 'SELECT uuid FROM traslados WHERE uuid = ?', [uuid]);
+  const existente = await txQueryOne(
+    conn,
+    `SELECT t.uuid FROM traslados t JOIN sedes so ON so.id = t.sede_origen_id
+      WHERE t.uuid = ? AND so.empresa_id = ?`,
+    [uuid, ctx.empresaId],
+  );
   if (existente) return { uuid, duplicado: true };
 
   if (!p.detalles?.length) throw badRequest('TRASLADO_VACIO', 'El traslado no tiene productos');
 
-  const origen = await sedePorUuid(conn, p.sede_origen_uuid);
-  const destino = await sedePorUuid(conn, p.sede_destino_uuid);
+  const origen = await sedePorUuid(conn, p.sede_origen_uuid, ctx.empresaId);
+  const destino = await sedePorUuid(conn, p.sede_destino_uuid, ctx.empresaId);
   if (!origen || !destino) throw notFound('Sede');
   if (!origen.activo || !destino.activo) throw badRequest('SEDE_INACTIVA', 'Una de las sedes está desactivada');
 
@@ -99,8 +107,8 @@ export async function crearTraslado(conn, p, ctx) {
 
   const productos = await txQuery(
     conn,
-    'SELECT id, uuid, nombre FROM productos WHERE uuid IN (?) AND deleted_at IS NULL',
-    [p.detalles.map((d) => d.producto_uuid)],
+    'SELECT id, uuid, nombre FROM productos WHERE uuid IN (?) AND empresa_id = ? AND deleted_at IS NULL',
+    [p.detalles.map((d) => d.producto_uuid), ctx.empresaId],
   );
   const porUuid = new Map(productos.map((x) => [x.uuid, x]));
 
@@ -153,7 +161,7 @@ export async function crearTraslado(conn, p, ctx) {
 
   if (directo) {
     // Nace despachado: misma transacción, mismas comprobaciones de stock.
-    const t = await bloquearTraslado(conn, uuid);
+    const t = await bloquearTraslado(conn, uuid, ctx.empresaId);
     const r = await despachar(conn, t, p, ctx, 'Movimiento directo');
     return { ...r, tipo: 'DIRECTO' };
   }
@@ -161,7 +169,7 @@ export async function crearTraslado(conn, p, ctx) {
 }
 
 export async function aprobarTraslado(conn, p, ctx) {
-  const t = await bloquearTraslado(conn, p.uuid);
+  const t = await bloquearTraslado(conn, p.uuid, ctx.empresaId);
   // Reenvío del mismo despacho: idempotente.
   if (t.estado === 'APROBADO' && Number(t.resuelto_por) === Number(ctx.usuarioId)) {
     return { uuid: t.uuid, estado: t.estado, duplicado: true };
@@ -203,7 +211,7 @@ async function despachar(conn, t, p, ctx, nota) {
   if (reparto.error) throw badRequest('TRASLADO_SIN_UNIDADES', reparto.error);
   const enviadaDe = new Map(reparto.lineas.map((l) => [l.uuid, l.enviada]));
 
-  const productos = await bloquearProductos(conn, detalles.map((d) => d.producto_uuid));
+  const productos = await bloquearProductos(conn, detalles.map((d) => d.producto_uuid), ctx.empresaId);
 
   // Con los productos bloqueados, el stock de origen no puede cambiar mientras
   // se comprueba. No se envía lo que no hay: a diferencia de una venta sin
@@ -300,7 +308,7 @@ async function despachar(conn, t, p, ctx, nota) {
 }
 
 export async function rechazarTraslado(conn, p, ctx) {
-  const t = await bloquearTraslado(conn, p.uuid);
+  const t = await bloquearTraslado(conn, p.uuid, ctx.empresaId);
   if (t.estado === 'RECHAZADO' && Number(t.resuelto_por) === Number(ctx.usuarioId)) {
     return { uuid: t.uuid, estado: t.estado, duplicado: true };
   }
@@ -329,7 +337,7 @@ export async function rechazarTraslado(conn, p, ctx) {
 }
 
 export async function cancelarTraslado(conn, p, ctx) {
-  const t = await bloquearTraslado(conn, p.uuid);
+  const t = await bloquearTraslado(conn, p.uuid, ctx.empresaId);
   if (t.estado === 'CANCELADO') return { uuid: t.uuid, estado: t.estado, duplicado: true };
   const motivo = puedeCancelar(t, usuarioDe(ctx));
   if (motivo) {

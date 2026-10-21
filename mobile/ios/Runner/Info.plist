@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Inventario POS</string>
+	<string>Ventario</string>
 
 	<!-- iOS mata la app en el acto si usa la cámara sin declarar el motivo.
 	     El texto se le muestra al usuario en el diálogo de permiso, así que
@@ -36,7 +36,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>inventario_pos</string>
+	<string>Ventario</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

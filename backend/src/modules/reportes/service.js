@@ -21,7 +21,8 @@ import { filtroSede } from '../../domain/alcance.js';
 export function filtroAmbito(columna, ambito) {
   if (ambito?.sedeId) return { sql: `${columna} = ?`, params: [ambito.sedeId] };
   if (ambito?.alcance) return filtroSede(columna, ambito.alcance);
-  return { sql: '1 = 1', params: [] };
+  // Sin ámbito no hay nada que mostrar: nunca «todo» (serían todas las empresas).
+  return { sql: '1 = 0', params: [] };
 }
 
 const EXPR_AGRUPACION = {
@@ -137,12 +138,12 @@ export async function ventasPorEmpleado({ desde, hasta }, ambito) {
              AND v.anula_a_venta_id IS NULL
              AND v.fecha_local BETWEEN ? AND ?
              AND ${fv.sql}
-      WHERE u.deleted_at IS NULL
+      WHERE u.deleted_at IS NULL AND u.empresa_id = ?
         AND (u.rol = 'ADMIN' OR EXISTS (SELECT 1 FROM usuario_sedes us
                                          WHERE us.usuario_id = u.id AND ${fu.sql}))
       GROUP BY u.id, u.uuid, u.nombre, u.email, u.rol, u.activo, u.ultimo_acceso
       ORDER BY total DESC, u.nombre ASC`,
-    [desde, hasta, ...fa.params, desde, hasta, ...fv.params, ...fu.params],
+    [desde, hasta, ...fa.params, desde, hasta, ...fv.params, ambito.alcance.empresaId, ...fu.params],
   );
 }
 
@@ -270,7 +271,7 @@ export async function dashboard(ambito) {
        (SELECT COALESCE(SUM(total),0) ${ventasEn('fecha_local BETWEEN ? AND ?')})   AS ventas_semana,
        (SELECT COALESCE(SUM(total),0) ${ventasEn('fecha_local BETWEEN ? AND ?')})   AS ventas_mes,
        (SELECT COALESCE(SUM(total - costo_total),0) ${ventasEn('fecha_local BETWEEN ? AND ?')}) AS margen_mes,
-       (SELECT COUNT(*) FROM productos WHERE deleted_at IS NULL AND activo = 1)     AS productos_activos,
+       (SELECT COUNT(*) FROM productos WHERE empresa_id = ? AND deleted_at IS NULL AND activo = 1) AS productos_activos,
        (SELECT COUNT(*) FROM v_stock_bajo_sedes WHERE ${fv.sql})                    AS productos_stock_bajo,
        (SELECT COUNT(*) FROM stock_sedes ss JOIN productos p ON p.id = ss.producto_id
          WHERE p.deleted_at IS NULL AND p.activo = 1 AND ss.stock_actual <= 0 AND ${fs.sql}) AS productos_agotados,
@@ -286,6 +287,7 @@ export async function dashboard(ambito) {
       semana.desde, semana.hasta, ...fv.params,
       mes.desde, mes.hasta, ...fv.params,
       mes.desde, mes.hasta, ...fv.params,
+      ambito.alcance.empresaId,
       ...fv.params,
       ...fs.params,
       ...fs.params,

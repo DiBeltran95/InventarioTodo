@@ -14,6 +14,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/estados.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../categorias/presentation/categorias_page.dart';
+import '../../cuenta/domain/plan.dart';
+import '../../cuenta/presentation/plan_ui.dart';
 import '../data/imagen_producto.dart';
 import 'productos_providers.dart';
 
@@ -72,6 +74,14 @@ class _ProductoFormPageState extends ConsumerState<ProductoFormPage> {
       // Un SKU tecleado a mano acaba en duplicados y erratas. Se propone uno
       // libre en cuanto hay nombre, y el usuario puede sobrescribirlo.
       _nombre.addListener(_sugerirSku);
+      // Se llega aquí desde varios sitios (escáner, entrada, inicio): el cupo
+      // del plan se comprueba en el propio formulario, con datos locales para
+      // no hacer esperar. Sin cupo, se explica y se vuelve atrás.
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        final cabe = await hayCupo(context, ref, RecursoLimitado.productos, refrescar: false);
+        if (!cabe && mounted) context.pop();
+      });
     }
   }
 

@@ -12,6 +12,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import rutasAuth from './modules/auth/routes.js';
 import rutasEmpleados from './modules/empleados/index.js';
 import rutasSedes from './modules/sedes/index.js';
+import rutasCuenta from './modules/cuenta/index.js';
 import rutasAuditoria from './modules/auditoria/index.js';
 import rutasCategorias from './modules/categorias/index.js';
 import rutasProveedores from './modules/proveedores/index.js';
@@ -105,6 +106,7 @@ export function crearApp() {
   // la app vieja siga encontrándolas, pero las gestiona su propio módulo.
   api.use('/auth/usuarios', rutasEmpleados);
   api.use('/auth', rutasAuth);
+  api.use('/cuenta', rutasCuenta);
   api.use('/sedes', rutasSedes);
   api.use('/auditoria', rutasAuditoria);
   api.use('/categorias', rutasCategorias);

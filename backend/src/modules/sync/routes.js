@@ -17,6 +17,7 @@ const router = Router();
 router.use(autenticarConGracia, limitadorSync);
 
 const contexto = (req) => ({
+  empresaId: req.empresaId,
   usuarioId: req.usuario.id,
   usuarioUuid: req.usuario.uuid,
   dispositivoUuid: req.dispositivoUuid,

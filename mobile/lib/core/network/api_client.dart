@@ -133,8 +133,9 @@ class ApiClient {
   Future<Map<String, dynamic>> put(String ruta, {Object? cuerpo}) => _ejecutar(
       () => _dio.put<dynamic>('${AppConfig.versionApi}$ruta', data: cuerpo));
 
-  Future<Map<String, dynamic>> delete(String ruta) =>
-      _ejecutar(() => _dio.delete<dynamic>('${AppConfig.versionApi}$ruta'));
+  /// [cuerpo] opcional: eliminar la cuenta lo exige (contraseña y confirmación).
+  Future<Map<String, dynamic>> delete(String ruta, {Object? cuerpo}) =>
+      _ejecutar(() => _dio.delete<dynamic>('${AppConfig.versionApi}$ruta', data: cuerpo));
 
   /// Sube la foto de un producto. La UI no llama esto: lo hace el SyncEngine
   /// cuando hay red, para que un alta offline no quede bloqueada.

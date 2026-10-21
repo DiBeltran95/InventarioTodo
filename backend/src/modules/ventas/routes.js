@@ -13,6 +13,7 @@ const router = Router();
 router.use(autenticar, resolverSede(false));
 
 const contexto = (req) => ({
+  empresaId: req.empresaId,
   usuarioId: req.usuario.id,
   usuarioUuid: req.usuario.uuid,
   dispositivoUuid: req.dispositivoUuid,
@@ -26,7 +27,7 @@ router.get(
   validar({ query: esquemas.filtrosVentaSchema }),
   asyncHandler(async (req, res) => {
     const f = req.validated.query;
-    const { items, total } = await servicio.listarVentas(f);
+    const { items, total } = await servicio.listarVentas(f, req.alcance);
     paginado(res, ocultarCostos(items, req.usuario.rol), { total, pagina: f.pagina, limite: f.limite });
   }),
 );
@@ -35,7 +36,7 @@ router.get(
   '/:uuid',
   validar({ params: esquemas.paramUuid }),
   asyncHandler(async (req, res) => {
-    ok(res, ocultarCostos(await servicio.obtenerVenta(req.params.uuid), req.usuario.rol));
+    ok(res, ocultarCostos(await servicio.obtenerVenta(req.params.uuid, req.alcance), req.usuario.rol));
   }),
 );
 

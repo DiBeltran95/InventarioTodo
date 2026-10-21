@@ -9,16 +9,46 @@ import { logger } from '../utils/logger.js';
  * "esto fue transitorio": la cola de sincronización descarta lo primero y
  * reintenta lo segundo. Ver ApiError.permanente.
  */
-function traducirErrorSql(err) {
+/**
+ * Límite del plan alcanzado. Lo lanza la base (triggers de 004_plataforma.sql)
+ * con el mensaje `LIMITE_PLAN:<recurso>`; la app lo reconoce por el código y
+ * abre la hoja que explica el límite. Es permanente: reintentar no lo arregla.
+ */
+const LIMITES = {
+  sedes: 'Tu plan no admite más sedes',
+  personas: 'Tu plan no admite más personas en el equipo',
+  productos: 'Tu plan no admite más productos',
+};
+
+function errorDeRegla(err) {
+  const mensaje = err.sqlMessage ?? '';
+  const limite = /^LIMITE_PLAN:(\w+)$/.exec(mensaje);
+  if (limite) {
+    const recurso = limite[1];
+    return new ApiError(409, 'LIMITE_PLAN', LIMITES[recurso] ?? 'Alcanzaste el límite de tu plan', {
+      recurso,
+    });
+  }
+  if (mensaje === 'EMAIL_EN_USO') {
+    return new ApiError(409, 'EMAIL_EN_USO', 'Ya hay una cuenta con ese correo');
+  }
+  return new ApiError(409, 'REGLA_NEGOCIO', mensaje || 'Operación no permitida');
+}
+
+export function traducirErrorSql(err) {
   switch (err.code) {
     case 'ER_DUP_ENTRY': {
       const m = /Duplicate entry '(.+)' for key '(.+)'/.exec(err.sqlMessage || '');
       const clave = m?.[2] ?? '';
-      const valor = m?.[1] ?? '';
+      // Con la empresa en la llave, el valor llega como «7-BEB-001»: se
+      // muestra sin el id interno de la empresa.
+      const valor = (m?.[1] ?? '').replace(/^\d+-/, '');
       const legible = {
-        uk_productos_sku: `Ya existe un producto con el SKU "${valor}"`,
-        uk_prodcod_codigo: `El código "${valor}" ya está asignado a otro producto`,
+        uk_productos_empresa_sku: `Ya existe un producto con el SKU "${valor}"`,
+        uk_prodcod_empresa_codigo: `El código "${valor}" ya está asignado a otro producto`,
+        uk_sedes_empresa_codigo: `Ya hay una sede con el código "${valor}"`,
         uk_usuarios_email: `Ya existe un usuario con el correo "${valor}"`,
+        uk_usuarios_empresa_documento: `Ya hay una persona con el documento "${valor}"`,
         uk_ventas_numero: `Ya existe una venta con el número "${valor}"`,
         uk_dispositivos_prefijo: 'Ese prefijo de folio ya está en uso',
       };
@@ -45,7 +75,7 @@ function traducirErrorSql(err) {
     case 'ER_CONSTRAINT_FAILED':
       return new ApiError(422, 'RESTRICCION', 'Los datos violan una regla del modelo');
     case 'ER_SIGNAL_EXCEPTION':
-      return new ApiError(409, 'REGLA_NEGOCIO', err.sqlMessage ?? 'Operación no permitida');
+      return errorDeRegla(err);
     case 'ER_LOCK_DEADLOCK':
     case 'ER_LOCK_WAIT_TIMEOUT':
       return new ApiError(

@@ -16,8 +16,9 @@ import {
 } from '../src/domain/traslados.js';
 import { calcularEsperado, compararConteo, aplicarRecaudo } from '../src/domain/caja.js';
 
-// Sedes: 1 = principal, 2 = norte, 3 = sur.
-const director = { id: 1, rol: 'ADMIN', alcance: { esDirector: true, sedeIds: [] } };
+// Sedes de la empresa 1: 1 = principal, 2 = norte, 3 = sur. La 9 es de OTRA empresa.
+// El director trae en su alcance todas las sedes de su empresa (cargarAlcance).
+const director = { id: 1, rol: 'ADMIN', alcance: { empresaId: 1, esDirector: true, sedeIds: [1, 2, 3] } };
 const gerenteNorte = { id: 2, rol: 'GERENTE', alcance: { esDirector: false, sedeIds: [2] } };
 const gerenteVarias = { id: 3, rol: 'GERENTE', alcance: { esDirector: false, sedeIds: [2, 3] } };
 const vendedorNorte = { id: 4, rol: 'VENDEDOR', alcance: { esDirector: false, sedeIds: [2] } };
@@ -27,8 +28,9 @@ const auxSur = { id: 7, rol: 'AUXILIAR_INVENTARIO', alcance: { esDirector: false
 
 // ── Alcance ─────────────────────────────────────────────────────────────────
 
-test('el director ve todas las sedes; el gerente sólo las suyas', () => {
+test('el director ve todas las sedes de SU empresa; el gerente sólo las suyas', () => {
   assert.equal(veSede(director.alcance, 3), true);
+  assert.equal(veSede(director.alcance, 9), false, 'una sede de otra empresa no es suya');
   assert.equal(veSede(gerenteNorte.alcance, 2), true);
   assert.equal(veSede(gerenteNorte.alcance, 3), false);
   assert.equal(veSede(gerenteVarias.alcance, '3'), true, 'el id puede llegar como texto');
@@ -36,7 +38,8 @@ test('el director ve todas las sedes; el gerente sólo las suyas', () => {
 
 test('el filtro SQL del alcance nunca genera IN () vacío', () => {
   assert.deepEqual(filtroSede('v.sede_id', { esDirector: false, sedeIds: [] }).params, [0, [0]]);
-  assert.deepEqual(filtroSede('v.sede_id', director.alcance).params, [1, [0]]);
+  // Sin pase libre: el director filtra por sus sedes como cualquiera.
+  assert.deepEqual(filtroSede('v.sede_id', director.alcance).params, [0, [1, 2, 3]]);
   assert.deepEqual(filtroSede('v.sede_id', gerenteVarias.alcance).params, [0, [2, 3]]);
 });
 
@@ -45,6 +48,13 @@ test('la huella del alcance cambia al cambiar de sede, no al reordenarlas', () =
   assert.equal(a, huellaAlcance('GERENTE', { esDirector: false, sedeIds: [3, 2] }));
   assert.notEqual(a, huellaAlcance('GERENTE', { esDirector: false, sedeIds: [2] }));
   assert.notEqual(a, huellaAlcance('VENDEDOR', { esDirector: false, sedeIds: [2, 3] }));
+});
+
+test('la huella cambia si el teléfono pasa a otra empresa', () => {
+  const a = huellaAlcance('ADMIN', { empresaId: 1, esDirector: true, sedeIds: [1] });
+  assert.notEqual(a, huellaAlcance('ADMIN', { empresaId: 2, esDirector: true, sedeIds: [1] }));
+  // Al director no se le reinicia todo por crear una sede nueva.
+  assert.equal(a, huellaAlcance('ADMIN', { empresaId: 1, esDirector: true, sedeIds: [1, 4] }));
 });
 
 test('un gerente administra vendedores y auxiliares de sus sedes, y nada más', () => {
@@ -56,6 +66,24 @@ test('un gerente administra vendedores y auxiliares de sus sedes, y nada más', 
   assert.equal(puedeAdministrar(gestor, { rol: 'ADMIN', sedeIds: [] }), false, 'el director');
   assert.equal(puedeAdministrar({ rol: 'VENDEDOR', alcance: vendedorNorte.alcance }, { rol: 'VENDEDOR', sedeIds: [2] }), false);
   assert.equal(puedeAdministrar({ rol: 'ADMIN', alcance: director.alcance }, { rol: 'GERENTE', sedeIds: [2] }), true);
+});
+
+test('un gerente tampoco administra a quien es gerente o administrador en Control de Personal', () => {
+  const gestor = { rol: 'GERENTE', alcance: gerenteNorte.alcance };
+  assert.equal(puedeAdministrar(gestor, { rol: null, rol_asistencia: 'GERENTE', sedeIds: [2] }), false);
+  assert.equal(puedeAdministrar(gestor, { rol: 'VENDEDOR', rol_asistencia: 'ADMIN', sedeIds: [2] }), false);
+  assert.equal(puedeAdministrar(gestor, { rol: 'VENDEDOR', rol_asistencia: 'OPERADOR', sedeIds: [2] }), true);
+});
+
+test('roles por app: al menos una, el administrador lo es en las dos', () => {
+  assert.match(validarSedesDeRol(null, [], null), /al menos una app/);
+  assert.equal(validarSedesDeRol(null, [], 'OPERADOR'), null, 'el operador atiende cualquier sede');
+  assert.match(validarSedesDeRol(null, [], 'GERENTE'), /al menos una/);
+  assert.equal(validarSedesDeRol('ADMIN', [], 'ADMIN'), null);
+  assert.match(validarSedesDeRol('ADMIN', [], 'GERENTE'), /en las dos apps/);
+  assert.match(validarSedesDeRol('GERENTE', [2], 'ADMIN'), /en las dos apps/);
+  assert.equal(validarSedesDeRol('GERENTE', [2, 3], 'GERENTE'), null, 'gerente de las mismas sedes en ambas');
+  assert.match(validarSedesDeRol('VENDEDOR', [2, 3], 'GERENTE'), /exactamente una/);
 });
 
 test('cada rol tiene el número de sedes que le corresponde', () => {
