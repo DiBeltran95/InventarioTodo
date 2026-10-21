@@ -234,7 +234,16 @@ class TarjetaPlan extends StatelessWidget {
           children: [
             Row(
               children: [
-                Expanded(child: Text('Plan ${plan.nombre}', style: context.textos.titleLarge)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(plan.nombreApp.toUpperCase(),
+                          style: context.textos.labelSmall?.copyWith(color: context.colores.primary, letterSpacing: 1.2)),
+                      Text('Plan ${plan.nombre}', style: context.textos.titleLarge),
+                    ],
+                  ),
+                ),
                 Chip(
                   label: Text(plan.vencido ? 'Vencido' : (plan.esGratis ? 'Gratis' : 'Activo')),
                   backgroundColor: plan.vencido ? d.advertenciaContenedor : d.exitoContenedor,
@@ -246,19 +255,19 @@ class TarjetaPlan extends StatelessWidget {
             if (vence != null)
               Text(
                 plan.vencido
-                    ? 'Venció el ${vence.day}/${vence.month}/${vence.year}: la empresa opera con los límites del plan Gratis.'
+                    ? 'Venció el ${vence.day}/${vence.month}/${vence.year}: ${plan.nombreApp} opera con los límites del plan Gratis.'
                     : 'Vigente hasta el ${vence.day}/${vence.month}/${vence.year}',
                 style: context.textos.bodySmall?.copyWith(color: plan.vencido ? d.advertencia : context.colores.onSurfaceVariant),
               ),
             const SizedBox(height: 16),
-            for (final r in RecursoLimitado.values) ...[
+            for (final r in plan.recursos) ...[
               MedidorUso(recurso: r, uso: plan.de(r)),
-              if (r != RecursoLimitado.values.last) const SizedBox(height: 16),
+              if (r != plan.recursos.last) const SizedBox(height: 16),
             ],
             const SizedBox(height: 16),
             Text(
-              'Las personas incluyen a gerentes y a quienes solo marcan asistencia en Presente. '
-              'Para ampliar tu plan, el director de la empresa puede solicitarlo al equipo de la plataforma.',
+              'Cada app tiene su propio plan: si pagas una, la otra sigue en el suyo. '
+              'Para ampliarlo, el director de la empresa lo solicita al equipo de la plataforma.',
               style: context.textos.bodySmall?.copyWith(color: context.colores.onSurfaceVariant),
             ),
           ],

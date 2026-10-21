@@ -26,11 +26,14 @@ function recurso(usados, maximo) {
  * `maximo` null = sin límite. Un plan vencido opera con los límites de GRATIS
  * (`vencido` true): la app lo explica en vez de mostrar solo «límite alcanzado».
  */
-export async function planDeEmpresa(empresaId, conn = null) {
-  const sql = 'SELECT * FROM v_empresa_uso WHERE empresa_id = ?';
-  const fila = conn ? await txQueryOne(conn, sql, [empresaId]) : await queryOne(sql, [empresaId]);
+export async function planDeEmpresa(empresaId, conn = null, aplicativo = 'INVENTARIO') {
+  // Cada app tiene su plan (006_planes_y_roles_por_app.sql). Ventario lee el suyo.
+  const sql = 'SELECT * FROM v_empresa_uso_app WHERE empresa_id = ? AND aplicativo = ?';
+  const p = [empresaId, aplicativo];
+  const fila = conn ? await txQueryOne(conn, sql, p) : await queryOne(sql, p);
   if (!fila) return null;
   return {
+    aplicativo: fila.aplicativo,
     codigo: fila.plan_codigo,
     nombre: fila.plan_nombre,
     vence: fila.plan_vence ?? null,
@@ -38,6 +41,17 @@ export async function planDeEmpresa(empresaId, conn = null) {
     sedes: recurso(fila.sedes_usadas, fila.max_sedes),
     personas: recurso(fila.personas_usadas, fila.max_personas),
     productos: recurso(fila.productos_usados, fila.max_productos),
+    // Sedes de la empresa (compartidas) y cuántas puede tener: el mayor de
+    // los dos planes. Cada app usa solo las que elige.
+    sedes_empresa: recurso(fila.sedes_empresa, fila.tope_sedes_empresa),
+  };
+}
+
+/** Plan de cada app: { INVENTARIO: {...}, ASISTENCIA: {...} }. */
+export async function planesDeEmpresa(empresaId) {
+  return {
+    INVENTARIO: await planDeEmpresa(empresaId, null, 'INVENTARIO'),
+    ASISTENCIA: await planDeEmpresa(empresaId, null, 'ASISTENCIA'),
   };
 }
 

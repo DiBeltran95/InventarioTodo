@@ -570,9 +570,9 @@ class AuthRepository {
       'nombre': nombre,
       'email': email,
       'password': password,
-      // null = sin acceso a Inventario (solo usa Control de Personal).
+      // null = sin acceso a Inventario (solo usa Presente).
       'rol': rol?.api,
-      // La misma cuenta entra a Control de Personal con este rol (null = no).
+      // La misma cuenta entra a Presente con este rol (null = no).
       'rol_asistencia': rolAsistencia,
       if (documento != null && documento.isNotEmpty) 'documento': documento,
       'marca_asistencia': marcaAsistencia,
@@ -602,7 +602,7 @@ class AuthRepository {
       'nombre': ?nombre,
       'email': ?email,
       if (quitarAccesoInventario) 'rol': null else 'rol': ?rol?.api,
-      // Aquí null sí significa algo («sin acceso a Control de Personal»): viaja
+      // Aquí null sí significa algo («sin acceso a Presente»): viaja
       // solo cuando se cambió a propósito.
       if (cambiarRolAsistencia) 'rol_asistencia': rolAsistencia,
       'activo': ?activo,
@@ -623,6 +623,26 @@ class AuthRepository {
   }
 
   Future<void> revocarAccesoExtra(String uuid) => _api.delete('/auth/usuarios/$uuid/acceso-extra');
+
+  /// Pausa o reactiva la cuenta en una app ([aplicativo]: INVENTARIO o
+  /// ASISTENCIA) cuando el plan no alcanza para todos. Reactivar exige cupo
+  /// (LIMITE_PLAN); pausar en Ventario cierra sus sesiones aquí.
+  Future<void> pausarUsuario(String uuid, {required String aplicativo, required bool pausada}) =>
+      _api.post('/auth/usuarios/$uuid/pausa', cuerpo: {'aplicativo': aplicativo, 'pausada': pausada});
+
+  /// Personas que ya marcan asistencia en esa sede (Presente) y aún no tienen
+  /// cuenta: al crear un vendedor se elige una y no se reescriben sus datos.
+  Future<List<({String documento, String nombre, String? cargo})>> personasSinCuenta(String sedeUuid) async {
+    final respuesta = await _api.get('/auth/usuarios/personas', query: {'sede': sedeUuid});
+    return [
+      for (final p in respuesta['data'] as List<dynamic>)
+        (
+          documento: (p as Map)['documento'] as String,
+          nombre: p['nombre'] as String,
+          cargo: p['cargo'] as String?,
+        ),
+    ];
+  }
 
   /// Baja lógica. El servidor protege al último administrador.
   Future<void> eliminarUsuario(String uuid) => _api.delete('/auth/usuarios/$uuid');

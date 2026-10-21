@@ -75,6 +75,49 @@ enum RolUsuario {
   bool get veCostos => esGestor;
 }
 
+/// Rol único de una cuenta en la plataforma: decide a qué app entra.
+/// Director y gerente están en las dos (con las mismas sedes); vendedor y
+/// auxiliar, solo en Ventario; talento humano y operario, solo en Presente.
+enum RolCuenta {
+  director('Director General', 'Todas las sedes, el personal y los costos, en las dos apps.', RolUsuario.director, 'ADMIN'),
+  gerente('Gerente de Sede', 'Catálogo, stock y personal de sus sedes, en las dos apps.', RolUsuario.gerente, 'GERENTE'),
+  vendedor('Vendedor', 'Vende y consulta en su sede. No ve costos ni edita el catálogo.', RolUsuario.vendedor, null),
+  auxiliar('Auxiliar de Inventario', 'Registra entradas en su sede; el gerente aprueba sus ajustes. No vende.',
+      RolUsuario.auxiliarInventario, null),
+  talentoHumano('Talento humano', 'Personal, rostros, turnos y reportes de todas las sedes de Presente.', null,
+      'TALENTO_HUMANO'),
+  operario('Operario', 'Deja los teléfonos de marcación listos: una cuenta para todas las sedes.', null, 'OPERARIO');
+
+  const RolCuenta(this.etiqueta, this.descripcion, this.inventario, this.asistencia);
+  final String etiqueta;
+  final String descripcion;
+
+  /// Rol en Ventario (null = no entra) y en Presente (null = no entra).
+  final RolUsuario? inventario;
+  final String? asistencia;
+
+  bool get enLasDos => inventario != null && asistencia != null;
+  bool get soloPresente => inventario == null;
+
+  /// Vendedor y auxiliar trabajan en una sede; el gerente, en las suyas.
+  bool get unaSede => inventario?.esDeUnaSede ?? false;
+  bool get conSedes => this == gerente || unaSede;
+
+  /// Lo que un gerente puede dar (lo mismo que exige el servidor).
+  static const asignablesPorGerente = [vendedor, auxiliar, operario];
+
+  static RolCuenta? de({RolUsuario? inventario, String? asistencia}) {
+    if (inventario != null) return values.where((r) => r.inventario == inventario).firstOrNull;
+    return switch (asistencia) {
+      'ADMIN' => director,
+      'GERENTE' => gerente,
+      'TALENTO_HUMANO' => talentoHumano,
+      'OPERARIO' || 'OPERADOR' || 'GENERAL' => operario,
+      _ => null,
+    };
+  }
+}
+
 /// Usuario tal como lo devuelve la API en la pantalla de administración.
 ///
 /// No se guarda en SQLite: la gestión de cuentas es una operación en línea y
@@ -89,6 +132,8 @@ class UsuarioAdmin {
     required this.activo,
     this.conAccesoInventario = true,
     this.rolAsistencia,
+    this.pausaInventario = false,
+    this.pausaAsistencia = false,
     this.documento,
     this.telefono,
     this.ultimoAcceso,
@@ -108,6 +153,8 @@ class UsuarioAdmin {
       rol: RolUsuario.desde(json['rol'] as String?),
       conAccesoInventario: json['rol'] != null,
       rolAsistencia: json['rol_asistencia'] as String?,
+      pausaInventario: json['pausa_inventario'] == true || json['pausa_inventario'] == 1,
+      pausaAsistencia: json['pausa_asistencia'] == true || json['pausa_asistencia'] == 1,
       documento: json['documento'] as String?,
       // MariaDB devuelve los TINYINT(1) como 0/1, no como booleanos.
       activo: json['activo'] == true || json['activo'] == 1,
@@ -145,8 +192,16 @@ class UsuarioAdmin {
   /// en vendedor por seguridad: esto dice si de verdad entra aquí.
   final bool conAccesoInventario;
 
-  /// Rol en Control de Personal: 'ADMIN', 'GERENTE', 'OPERADOR' o null.
+  /// Rol en Presente: 'ADMIN', 'GERENTE', 'TALENTO_HUMANO', 'OPERARIO' o null.
   final String? rolAsistencia;
+
+  /// En pausa en esa app porque el plan no alcanza para todos (en la otra
+  /// sigue igual).
+  final bool pausaInventario;
+  final bool pausaAsistencia;
+
+  RolCuenta? get rolCuenta =>
+      RolCuenta.de(inventario: conAccesoInventario ? rol : null, asistencia: rolAsistencia);
   final String? documento;
   final String? telefono;
   final DateTime? ultimoAcceso;

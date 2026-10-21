@@ -32,8 +32,16 @@ export function exigirEmpresa(empresaId) {
  */
 export async function cargarAlcance(usuario, conn = null) {
   const empresaId = exigirEmpresa(usuario.empresa_id);
+  // Solo las sedes ELEGIDAS para Ventario (sede_aplicativos): cada app
+  // trabaja en las suyas, hasta el límite de su plan.
   if (usuario.rol === ROLES.ADMIN) {
-    const todas = await leer(conn, 'SELECT id FROM sedes WHERE empresa_id = ?', [empresaId]);
+    const todas = await leer(
+      conn,
+      `SELECT s.id FROM sedes s
+         JOIN sede_aplicativos sa ON sa.sede_id = s.id AND sa.aplicativo = 'INVENTARIO'
+        WHERE s.empresa_id = ?`,
+      [empresaId],
+    );
     return { empresaId, esDirector: true, sedeIds: todas.map((f) => Number(f.id)) };
   }
   const filas = await leer(
@@ -41,6 +49,7 @@ export async function cargarAlcance(usuario, conn = null) {
     `SELECT us.sede_id
        FROM usuario_sedes us
        JOIN sedes s ON s.id = us.sede_id AND s.deleted_at IS NULL AND s.empresa_id = ?
+       JOIN sede_aplicativos sa ON sa.sede_id = s.id AND sa.aplicativo = 'INVENTARIO'
       WHERE us.usuario_id = ?`,
     [empresaId, usuario.id],
   );
@@ -97,15 +106,6 @@ export async function sedePrincipal(conn, empresaId) {
 /** Sedes visibles para un alcance, en orden: la principal primero. */
 export async function sedesDeAlcance(alcance, conn = null) {
   const empresaId = exigirEmpresa(alcance.empresaId);
-  if (alcance.esDirector) {
-    return leer(
-      conn,
-      `SELECT id, uuid, nombre, codigo, direccion, telefono, es_principal, activo
-         FROM sedes WHERE empresa_id = ? AND deleted_at IS NULL
-        ORDER BY es_principal DESC, nombre`,
-      [empresaId],
-    );
-  }
   if (!alcance.sedeIds.length) return [];
   return leer(
     conn,

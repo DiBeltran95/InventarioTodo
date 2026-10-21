@@ -67,6 +67,55 @@ void main() {
     });
   });
 
+  group('Planes y roles por app', () {
+    test('Mi empresa trae el plan de cada app', () {
+      final e = EmpresaInfo.desdeJson({
+        'empresa': {'uuid': 'u', 'nombre': 'Tienda'},
+        'plan': {..._planGratis, 'aplicativo': 'INVENTARIO'},
+        'planes': {
+          'INVENTARIO': {..._planGratis, 'aplicativo': 'INVENTARIO'},
+          'ASISTENCIA': {..._planGratis, 'aplicativo': 'ASISTENCIA', 'codigo': 'ILIMITADO', 'nombre': 'Ilimitado'},
+        },
+        'aplicativos': ['ASISTENCIA', 'INVENTARIO'],
+      });
+      expect(e.plan!.esVentario, isTrue);
+      expect(e.plan!.recursos, contains(RecursoLimitado.productos));
+      expect(e.planPresente!.nombreApp, 'Presente');
+      expect(e.planPresente!.esGratis, isFalse);
+      expect(e.planPresente!.recursos, isNot(contains(RecursoLimitado.productos)));
+    });
+
+    test('el plan guardado conserva su app', () {
+      final plan = PlanEmpresa.desdeJson({..._planGratis, 'aplicativo': 'ASISTENCIA'})!;
+      expect(PlanEmpresa.desdeJson(plan.aJson())!.aplicativo, 'ASISTENCIA');
+      expect(PlanEmpresa.desdeJson(_planGratis)!.aplicativo, 'INVENTARIO');
+    });
+
+    test('el rol único decide a qué app entra la cuenta', () {
+      expect(RolCuenta.director.enLasDos, isTrue);
+      expect(RolCuenta.gerente.asistencia, 'GERENTE');
+      expect(RolCuenta.vendedor.asistencia, isNull);
+      expect(RolCuenta.vendedor.unaSede, isTrue);
+      expect(RolCuenta.talentoHumano.inventario, isNull);
+      expect(RolCuenta.operario.conSedes, isFalse);
+      expect(RolCuenta.asignablesPorGerente, isNot(contains(RolCuenta.gerente)));
+      expect(RolCuenta.de(inventario: RolUsuario.auxiliarInventario), RolCuenta.auxiliar);
+      expect(RolCuenta.de(asistencia: 'OPERADOR'), RolCuenta.operario);
+      expect(RolCuenta.de(), isNull);
+    });
+
+    test('una cuenta solo de Presente y en pausa se reconoce', () {
+      final u = UsuarioAdmin.desdeJson({
+        'uuid': 'x', 'nombre': 'Luz', 'email': 'luz@ej.co', 'rol': null, 'rol_asistencia': 'TALENTO_HUMANO',
+        'activo': true, 'pausa_asistencia': 1, 'pausa_inventario': false,
+      });
+      expect(u.conAccesoInventario, isFalse);
+      expect(u.rolCuenta, RolCuenta.talentoHumano);
+      expect(u.pausaAsistencia, isTrue);
+      expect(u.pausaInventario, isFalse);
+    });
+  });
+
   group('Acceso a la app', () {
     test('una cuenta válida sin acceso a Inventario no es «credenciales incorrectas»', () {
       for (final codigo in ['APP_NO_HABILITADA', 'SIN_ACCESO_APP', 'EMPRESA_SUSPENDIDA', 'CUENTA_DESACTIVADA']) {

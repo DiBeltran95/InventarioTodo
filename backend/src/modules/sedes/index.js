@@ -69,6 +69,13 @@ async function crear(datos, req) {
       [uuid, req.empresaId, datos.nombre, datos.codigo, datos.direccion ?? null, datos.telefono ?? null],
     );
     const sede = await exigirSedePorUuid(conn, uuid, req.empresaId);
+    // Creada desde Ventario, se usa en Ventario. Si su plan ya no admite otra
+    // sede (aunque el de Presente sí), la base lo rechaza: LIMITE_PLAN → 409.
+    await txExecute(
+      conn,
+      "INSERT INTO sede_aplicativos (sede_id, aplicativo, elegida_por) VALUES (?, 'INVENTARIO', ?)",
+      [sede.id, req.usuario.id],
+    );
     await registrarAuditoria(conn, {
       usuarioId: req.usuario.id,
       sedeId: sede.id,
@@ -279,12 +286,82 @@ router.get(
   '/todas',
   asyncHandler(async (req, res) => {
     const filas = await query(
-      `SELECT uuid, nombre, codigo FROM sedes
-        WHERE empresa_id = ? AND deleted_at IS NULL AND activo = 1
-        ORDER BY es_principal DESC, nombre`,
+      `SELECT s.uuid, s.nombre, s.codigo FROM sedes s
+         JOIN sede_aplicativos sa ON sa.sede_id = s.id AND sa.aplicativo = 'INVENTARIO'
+        WHERE s.empresa_id = ? AND s.deleted_at IS NULL AND s.activo = 1
+        ORDER BY s.es_principal DESC, s.nombre`,
       [req.empresaId],
     );
     ok(res, filas);
+  }),
+);
+
+// Todas las sedes de la empresa (compartidas con Presente) y si Ventario las
+// usa: la pantalla de Sedes del director, para elegir cuáles usar.
+router.get(
+  '/administrar',
+  soloDirector,
+  asyncHandler(async (req, res) => {
+    const filas = await query(
+      `SELECT s.uuid, s.nombre, s.codigo, s.direccion, s.telefono, s.es_principal, s.activo,
+              EXISTS (SELECT 1 FROM sede_aplicativos sa
+                       WHERE sa.sede_id = s.id AND sa.aplicativo = 'INVENTARIO') AS elegida,
+              EXISTS (SELECT 1 FROM sede_aplicativos sa
+                       WHERE sa.sede_id = s.id AND sa.aplicativo = 'ASISTENCIA') AS elegida_presente
+         FROM sedes s
+        WHERE s.empresa_id = ? AND s.deleted_at IS NULL
+        ORDER BY s.es_principal DESC, s.nombre`,
+      [req.empresaId],
+    );
+    ok(
+      res,
+      filas.map((f) => ({
+        ...f,
+        es_principal: !!f.es_principal,
+        activo: !!f.activo,
+        elegida: !!f.elegida,
+        elegida_presente: !!f.elegida_presente,
+      })),
+    );
+  }),
+);
+
+// Usar una sede en Ventario. Irrevocable: no hay ruta para dejar de usarla
+// (solo la plataforma la quita si el plan baja). Sin cupo → LIMITE_PLAN 409.
+router.post(
+  '/:uuid/elegir',
+  soloDirector,
+  validar({ params: uuidParam }),
+  asyncHandler(async (req, res) => {
+    const resultado = await withTransaction(async (conn) => {
+      const sede = await exigirSedePorUuid(conn, req.params.uuid, req.empresaId);
+      if (!sede.activo) throw conflict('SEDE_INACTIVA', 'Activa la sede antes de usarla');
+      const ya = await txQueryOne(
+        conn,
+        "SELECT 1 x FROM sede_aplicativos WHERE sede_id = ? AND aplicativo = 'INVENTARIO'",
+        [sede.id],
+      );
+      if (!ya) {
+        await txExecute(
+          conn,
+          "INSERT INTO sede_aplicativos (sede_id, aplicativo, elegida_por) VALUES (?, 'INVENTARIO', ?)",
+          [sede.id, req.usuario.id],
+        );
+        // Para que la bajada la entregue ya como activa en los teléfonos.
+        await txExecute(conn, 'UPDATE sedes SET updated_at = UTC_TIMESTAMP(3) WHERE id = ?', [sede.id]);
+        await registrarAuditoria(conn, {
+          usuarioId: req.usuario.id,
+          sedeId: sede.id,
+          dispositivoUuid: req.dispositivoUuid,
+          accion: ACCIONES.SEDE_CAMBIADA,
+          entidad: 'sedes',
+          entidadUuid: sede.uuid,
+          despues: { elegida_en: 'INVENTARIO' },
+        });
+      }
+      return sedePublica(sede);
+    });
+    ok(res, resultado);
   }),
 );
 

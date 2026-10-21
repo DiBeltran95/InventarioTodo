@@ -13,6 +13,8 @@ class SedeAdmin {
     this.telefono,
     this.esPrincipal = false,
     this.activo = true,
+    this.elegida = true,
+    this.elegidaPresente,
   });
 
   factory SedeAdmin.desdeJson(Map<String, dynamic> j) => SedeAdmin(
@@ -23,6 +25,8 @@ class SedeAdmin {
         telefono: j['telefono'] as String?,
         esPrincipal: j['es_principal'] == true || j['es_principal'] == 1,
         activo: j['activo'] == null || j['activo'] == true || j['activo'] == 1,
+        elegida: j['elegida'] == null || j['elegida'] == true || j['elegida'] == 1,
+        elegidaPresente: j['elegida_presente'] == null ? null : j['elegida_presente'] == true || j['elegida_presente'] == 1,
       );
 
   final String uuid;
@@ -32,6 +36,13 @@ class SedeAdmin {
   final String? telefono;
   final bool esPrincipal;
   final bool activo;
+
+  /// ¿Ventario trabaja en esta sede? Las sedes son de la empresa (compartidas
+  /// con Presente) y cada app usa solo las que se eligen para ella.
+  final bool elegida;
+
+  /// ¿La usa Presente? Solo viene en el listado completo del director.
+  final bool? elegidaPresente;
 }
 
 /// Solicitud de un empleado para pasar a otra sede.
@@ -133,6 +144,14 @@ class GestionApi {
   // ── Sedes ─────────────────────────────────────────────────────────────────
 
   Future<List<SedeAdmin>> sedes() async => _lista(await _api.get('/sedes')).map(SedeAdmin.desdeJson).toList();
+
+  /// Todas las sedes de la empresa, también las que Ventario aún no usa (solo
+  /// el director): para elegir cuáles usar.
+  Future<List<SedeAdmin>> sedesParaAdministrar() async =>
+      _lista(await _api.get('/sedes/administrar')).map(SedeAdmin.desdeJson).toList();
+
+  /// Ventario empieza a usar la sede. No se puede deshacer; sin cupo → LIMITE_PLAN.
+  Future<void> elegirSede(String uuid) => _api.post('/sedes/$uuid/elegir');
 
   /// Todas las sedes activas, sólo nombre: para elegir a cuál pedir el cambio.
   Future<List<SedeAdmin>> todasLasSedes() async =>

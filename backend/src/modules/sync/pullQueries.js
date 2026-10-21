@@ -61,7 +61,12 @@ export const CONSULTAS = {
     extra: empresa,
     sql: `
       SELECT s.id AS _id, s.uuid, s.nombre, s.codigo, s.direccion, s.telefono,
-             s.es_principal, s.activo, s.updated_at, s.deleted_at
+             s.es_principal,
+             -- Una sede no elegida para Ventario baja INACTIVA: no aparece para
+             -- vender ni trasladar, pero su nombre sigue en el historial.
+             (s.activo = 1 AND EXISTS (SELECT 1 FROM sede_aplicativos sa
+                                        WHERE sa.sede_id = s.id AND sa.aplicativo = 'INVENTARIO')) AS activo,
+             s.updated_at, s.deleted_at
         FROM sedes s
        WHERE ${KEYSET('s')} AND s.empresa_id = ?
        ORDER BY s.updated_at, s.id LIMIT ?`,

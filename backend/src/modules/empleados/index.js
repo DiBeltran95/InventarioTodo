@@ -37,6 +37,7 @@ import {
   validarSedesDeRol,
   veSede,
   esDirector,
+  normalizarRoles,
   ROLES_ASISTENCIA,
 } from '../../domain/alcance.js';
 import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
@@ -97,14 +98,21 @@ const accesoExtraSchema = z
 
 const uuidParam = z.object({ uuid: z.string().uuid() });
 
+const pausaSchema = z.object({
+  aplicativo: z.enum(['INVENTARIO', 'ASISTENCIA']),
+  pausada: z.boolean(),
+});
+
+const personasQuery = z.object({ sede: z.string().uuid() });
+
 // ── Lectura ─────────────────────────────────────────────────────────────────
 
 /** Usuario con sus sedes. `conn` opcional (dentro de transacción). */
 async function cargarEmpleado(uuid, empresaId, conn = null) {
   const leer = (sql, p) => (conn ? txQueryOne(conn, sql, p) : queryOne(sql, p));
   const u = await leer(
-    `SELECT id, uuid, nombre, documento, email, rol, rol_asistencia, activo, telefono,
-            restringir_horario, horario, acceso_extra_hasta, ultimo_acceso, created_at, updated_at
+    `SELECT id, uuid, nombre, documento, email, rol, rol_asistencia, activo, pausa_inventario, pausa_asistencia,
+            telefono, restringir_horario, horario, acceso_extra_hasta, ultimo_acceso, created_at, updated_at
        FROM usuarios WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL`,
     [uuid, empresaId],
   );
@@ -132,6 +140,9 @@ function publico(u, ahora = new Date()) {
     rol: u.rol ?? null,
     rol_asistencia: u.rol_asistencia ?? null,
     activo: !!u.activo,
+    // En pausa por el plan en esa app (la cuenta sigue activa en la otra).
+    pausa_inventario: !!u.pausa_inventario,
+    pausa_asistencia: !!u.pausa_asistencia,
     telefono: u.telefono ?? null,
     sedes: u.sedes.map((s) => ({ uuid: s.uuid, nombre: s.nombre })),
     restringir_horario: !!u.restringir_horario,
@@ -152,7 +163,7 @@ function publico(u, ahora = new Date()) {
 export async function listar(gestor) {
   const filas = await query(
     `SELECT u.id, u.uuid, u.nombre, u.documento, u.email, u.rol, u.rol_asistencia, u.activo,
-            u.telefono, u.restringir_horario,
+            u.pausa_inventario, u.pausa_asistencia, u.telefono, u.restringir_horario,
             u.horario, u.acceso_extra_hasta, u.ultimo_acceso, u.created_at, u.updated_at,
             GROUP_CONCAT(CONCAT(s.id, '|', s.uuid, '|', s.nombre) ORDER BY s.nombre SEPARATOR '\\n') AS sedes_txt
        FROM usuarios u
@@ -160,7 +171,7 @@ export async function listar(gestor) {
        LEFT JOIN sedes s ON s.id = us.sede_id AND s.deleted_at IS NULL
       WHERE u.deleted_at IS NULL AND u.empresa_id = ?
       GROUP BY u.id, u.uuid, u.nombre, u.documento, u.email, u.rol, u.rol_asistencia, u.activo,
-               u.telefono, u.restringir_horario,
+               u.pausa_inventario, u.pausa_asistencia, u.telefono, u.restringir_horario,
                u.horario, u.acceso_extra_hasta, u.ultimo_acceso, u.created_at, u.updated_at
       ORDER BY u.nombre`,
     [gestor.alcance.empresaId],
@@ -220,18 +231,25 @@ function validarHorario(restringir, horario, rol) {
 }
 
 /**
- * El gerente no puede crear ni convertir a nadie en gerente o director, en
- * ninguna de las dos apps. Sí puede darle acceso a Control de Personal como
- * operador de kiosco.
+ * El gerente no puede crear ni convertir a nadie en gerente, director ni
+ * talento humano (esos son de toda la empresa). Sí crea vendedores, auxiliares
+ * y el operario de los teléfonos de marcación.
  */
 function exigirRolAsignable(gestor, rol, rolAsistencia = null) {
   if (esDirector(gestor.usuario.rol)) return;
   if (rol != null && rol !== ROLES.VENDEDOR && rol !== ROLES.AUXILIAR_INVENTARIO) {
-    throw forbidden('Un gerente sólo crea vendedores y auxiliares de inventario', 'ROL_NO_ASIGNABLE');
+    throw forbidden('Un gerente sólo crea vendedores, auxiliares y operarios', 'ROL_NO_ASIGNABLE');
   }
-  if (rolAsistencia != null && rolAsistencia !== 'OPERADOR') {
-    throw forbidden('Un gerente sólo da acceso a Control de Personal como operador', 'ROL_NO_ASIGNABLE');
+  if (rol == null && rolAsistencia != null && rolAsistencia !== 'OPERARIO') {
+    throw forbidden('Un gerente sólo crea vendedores, auxiliares y operarios', 'ROL_NO_ASIGNABLE');
   }
+}
+
+/** Roles coherentes por app, o 400 con el motivo. */
+function rolesFinales(rol, rolAsistencia) {
+  const r = normalizarRoles(rol, rolAsistencia);
+  if (r.error) throw badRequest('ROLES_INVALIDOS', r.error);
+  return r;
 }
 
 async function contarDirectoresActivos(conn, empresaId) {
@@ -304,7 +322,9 @@ const revocarSesiones = (conn, usuarioId) =>
     [usuarioId],
   );
 
-export async function crear(datos, gestor, ctx) {
+export async function crear(datosCliente, gestor, ctx) {
+  const roles = rolesFinales(datosCliente.rol, datosCliente.rol_asistencia);
+  const datos = { ...datosCliente, rol: roles.rol, rol_asistencia: roles.rolAsistencia };
   exigirRolAsignable(gestor, datos.rol, datos.rol_asistencia);
   const tramos = validarHorario(datos.restringir_horario, datos.horario, datos.rol);
   const empresaId = gestor.alcance.empresaId;
@@ -421,7 +441,8 @@ function etiquetaRol(rol) {
   );
 }
 
-export async function actualizar(uuid, datos, gestor, ctx) {
+export async function actualizar(uuid, datosCliente, gestor, ctx) {
+  let datos = datosCliente;
   const empresaId = gestor.alcance.empresaId;
   return withTransaction(async (conn) => {
     const antes = await cargarEmpleado(uuid, empresaId, conn);
@@ -443,17 +464,29 @@ export async function actualizar(uuid, datos, gestor, ctx) {
       throw badRequest('AUTO_DESACTIVACION', 'No puedes desactivar tu propia cuenta');
     }
 
-    const rol = datos.rol !== undefined ? datos.rol : antes.rol;
-    const rolAsistencia = datos.rol_asistencia !== undefined ? datos.rol_asistencia : antes.rol_asistencia;
-    if (
-      (datos.rol !== undefined && datos.rol !== antes.rol) ||
-      (datos.rol_asistencia !== undefined && datos.rol_asistencia !== antes.rol_asistencia)
-    ) {
-      exigirRolAsignable(
-        gestor,
-        datos.rol !== undefined ? datos.rol : null,
-        datos.rol_asistencia !== undefined ? datos.rol_asistencia : null,
-      );
+    // Un rol por app, coherente: si el cliente cambió uno, el otro se deriva
+    // (p. ej. pasar a gerente lo hace gerente en las dos apps).
+    let rol = antes.rol;
+    let rolAsistencia = antes.rol_asistencia;
+    if (datos.rol !== undefined || datos.rol_asistencia !== undefined) {
+      let pedido;
+      if (datos.rol !== undefined) {
+        // Rol de Ventario (o null + un rol solo de Presente).
+        pedido = rolesFinales(datos.rol, datos.rol === null ? (datos.rol_asistencia ?? null) : null);
+      } else if (datos.rol_asistencia === null) {
+        // Quitarle Presente: conserva su rol de Ventario si es de una sola app.
+        pedido = rolesFinales([ROLES.ADMIN, ROLES.GERENTE].includes(antes.rol) ? null : antes.rol, null);
+      } else {
+        pedido = rolesFinales(null, datos.rol_asistencia);
+      }
+      rol = pedido.rol;
+      rolAsistencia = pedido.rolAsistencia;
+      if (rol !== antes.rol || rolAsistencia !== antes.rol_asistencia) {
+        exigirRolAsignable(gestor, rol, rolAsistencia);
+        datos = { ...datos, rol, rol_asistencia: rolAsistencia };
+      } else {
+        datos = { ...datos, rol: undefined, rol_asistencia: undefined };
+      }
     }
 
     // No dejar el negocio sin Director General activo.
@@ -656,6 +689,60 @@ export async function revocarAccesoExtra(uuid, gestor, ctx) {
   });
 }
 
+/**
+ * Personas que ya marcan asistencia en Presente en esa sede y aún no tienen
+ * cuenta: al crear un vendedor se elige una y no se reescriben sus datos (el
+ * documento la liga a la cuenta, y no ocupa un cupo nuevo).
+ */
+export async function personasSinCuenta(sedeUuid, gestor) {
+  const sede = await queryOne(
+    'SELECT id FROM sedes WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL',
+    [sedeUuid, gestor.alcance.empresaId],
+  );
+  if (!sede) throw notFound('Sede');
+  if (!veSede(gestor.alcance, sede.id)) {
+    throw forbidden('No gestionas esa sede', 'SEDE_FUERA_DE_ALCANCE');
+  }
+  const filas = await query(
+    `SELECT documento, nombre, cargo
+       FROM asis_empleados
+      WHERE empresa_id = ? AND sede_id = ? AND activo = 1 AND usuario_id IS NULL
+      ORDER BY nombre`,
+    [gestor.alcance.empresaId, sede.id],
+  );
+  return filas.map((f) => ({ documento: f.documento, nombre: f.nombre, cargo: f.cargo ?? null }));
+}
+
+/**
+ * Pausa o reactiva a alguien en UNA app (cuando el plan no alcanza para todos).
+ * Reactivar exige cupo: lo comprueba la base (LIMITE_PLAN → 409). Al director
+ * no se le pausa: siempre debe poder entrar a administrar.
+ */
+export async function pausar(uuid, { aplicativo, pausada }, gestor, ctx) {
+  const empresaId = gestor.alcance.empresaId;
+  return withTransaction(async (conn) => {
+    const u = await cargarEmpleado(uuid, empresaId, conn);
+    if (u.id === gestor.usuario.id) throw badRequest('AUTO_PAUSA', 'No puedes pausarte a ti mismo');
+    if (!puedeAdministrar(gestor, u)) throw forbidden('No puedes administrar esta cuenta', 'SIN_PERMISO');
+    if (u.rol === ROLES.ADMIN && pausada) {
+      throw badRequest('DIRECTOR_SIN_PAUSA', 'Al administrador no se le pausa');
+    }
+    const columna = aplicativo === 'INVENTARIO' ? 'pausa_inventario' : 'pausa_asistencia';
+    await txExecute(conn, `UPDATE usuarios SET ${columna} = ? WHERE id = ?`, [pausada ? 1 : 0, u.id]);
+    if (pausada && aplicativo === 'INVENTARIO') await revocarSesiones(conn, u.id);
+    await registrarAuditoria(conn, {
+      usuarioId: gestor.usuario.id,
+      sedeId: u.sedeIds[0] ?? null,
+      dispositivoUuid: ctx.dispositivoUuid,
+      accion: pausada ? ACCIONES.USUARIO_DESACTIVADO : ACCIONES.USUARIO_ACTIVADO,
+      entidad: 'usuarios',
+      entidadUuid: u.uuid,
+      despues: { pausa: aplicativo, pausada },
+    });
+    return publico(await cargarEmpleado(uuid, empresaId, conn));
+  });
+}
+
 // ── Rutas ───────────────────────────────────────────────────────────────────
 
 const router = Router();
@@ -667,6 +754,21 @@ const ctxDe = (req) => ({ dispositivoUuid: req.dispositivoUuid });
 router.get(
   '/',
   asyncHandler(async (req, res) => ok(res, await listar(gestorDe(req)))),
+);
+
+// Antes de '/:uuid' para que «personas» no se tome por un uuid.
+router.get(
+  '/personas',
+  validar({ query: personasQuery }),
+  asyncHandler(async (req, res) => ok(res, await personasSinCuenta(req.query.sede, gestorDe(req)))),
+);
+
+router.post(
+  '/:uuid/pausa',
+  validar({ params: uuidParam, body: pausaSchema }),
+  asyncHandler(async (req, res) =>
+    ok(res, await pausar(req.params.uuid, req.body, gestorDe(req), ctxDe(req))),
+  ),
 );
 
 router.post(

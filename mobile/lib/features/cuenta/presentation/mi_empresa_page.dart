@@ -35,6 +35,10 @@ class MiEmpresaPage extends ConsumerWidget {
                 _Encabezado(empresa: e, editable: esDirector),
                 const SizedBox(height: 16),
                 if (e.plan != null) TarjetaPlan(plan: e.plan!),
+                if (e.planPresente != null) ...[
+                  const SizedBox(height: 12),
+                  TarjetaPlan(plan: e.planPresente!),
+                ],
                 const SizedBox(height: 16),
                 _Aplicativos(aplicativos: e.aplicativos),
               ],

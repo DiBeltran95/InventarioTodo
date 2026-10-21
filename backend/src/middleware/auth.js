@@ -34,7 +34,7 @@ export function fueraDeHorario(evaluacion) {
  */
 export function cargarUsuarioDeSesion(uuid) {
   return queryOne(
-    `SELECT u.id, u.uuid, u.empresa_id, u.nombre, u.email, u.rol, u.activo,
+    `SELECT u.id, u.uuid, u.empresa_id, u.nombre, u.email, u.rol, u.activo, u.pausa_inventario,
             u.restringir_horario, u.horario, u.acceso_extra_hasta,
             e.estado AS empresa_estado, e.deleted_at AS empresa_borrada,
             ea.activo AS app_habilitada
@@ -68,6 +68,12 @@ export function exigirAccesoInventario(usuario) {
   if (!usuario.rol) {
     throw forbidden(
       'Tu cuenta no tiene acceso a Inventario. Pídeselo al administrador de tu empresa.',
+      'SIN_ACCESO_APP',
+    );
+  }
+  if (usuario.pausa_inventario) {
+    throw forbidden(
+      'Tu cuenta está en pausa en Ventario porque el plan de tu empresa no alcanza para todos. Pídele al administrador que te active.',
       'SIN_ACCESO_APP',
     );
   }

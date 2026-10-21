@@ -128,7 +128,7 @@ class UsuariosPage extends ConsumerWidget {
     for (final u in lista.where((u) => u.rol.esDirector)) {
       grupos.putIfAbsent(null, () => []).add(u);
     }
-    final conSede = lista.where((u) => !u.rol.esDirector).toList();
+    final conSede = lista.where((u) => !u.rol.esDirector && !(u.rolCuenta?.soloPresente ?? false)).toList();
     final nombres = {for (final u in conSede) ...u.sedes.map((s) => s.nombre)}.toList()..sort();
     for (final n in nombres) {
       grupos[n] = conSede.where((u) => u.sedes.any((s) => s.nombre == n)).toList()
@@ -140,6 +140,9 @@ class UsuariosPage extends ConsumerWidget {
     }
     final sinSede = conSede.where((u) => u.sedes.isEmpty).toList();
     if (sinSede.isNotEmpty) grupos['Sin sede asignada'] = sinSede;
+    // Talento humano y operarios: de todas las sedes, solo en Presente.
+    final presente = lista.where((u) => !u.rol.esDirector && (u.rolCuenta?.soloPresente ?? false)).toList();
+    if (presente.isNotEmpty) grupos['Solo Presente'] = presente;
     return grupos;
   }
 
@@ -165,8 +168,8 @@ Future<void> abrirFormularioEmpleado(BuildContext context, WidgetRef ref, {Usuar
   if (guardado == true) ref.invalidate(usuariosProvider);
 }
 
-/// Qué hace la cuenta en Inventario: su rol, o que solo usa Control de Personal.
-String _etiquetaInventario(UsuarioAdmin u) => u.conAccesoInventario ? u.rol.etiqueta : 'Solo Presente';
+/// El rol único de la cuenta (decide a qué app entra).
+String _etiquetaRol(UsuarioAdmin u) => u.rolCuenta?.etiqueta ?? 'Sin rol';
 
 /// Lista de cuentas. Es un `FutureProvider` y no un stream de Drift porque
 /// estos datos viven en el servidor, no en la base local.
@@ -313,15 +316,24 @@ class _FilaUsuario extends StatelessWidget {
               runSpacing: 4,
               children: [
                 _Etiqueta(
-                  texto: _etiquetaInventario(usuario),
+                  texto: _etiquetaRol(usuario),
                   color: destacado ? context.dominio.info : context.colores.onSurfaceVariant,
                   fondo: destacado ? context.dominio.infoContenedor : context.colores.surfaceContainerHighest,
                 ),
-                if (usuario.rolAsistencia != null && usuario.conAccesoInventario && !usuario.rol.esDirector)
+                if (usuario.conAccesoInventario && usuario.pausaInventario)
                   _Etiqueta(
-                    texto: 'Asistencia: ${_etiquetaAsistencia(usuario.rolAsistencia!)}',
-                    color: context.colores.onSurfaceVariant,
-                    fondo: context.colores.surfaceContainerHighest,
+                    texto: 'En pausa en Ventario',
+                    color: context.dominio.advertencia,
+                    fondo: context.dominio.advertenciaContenedor,
+                    icono: Icons.pause_circle_outline_rounded,
+                  ),
+                if (usuario.rolAsistencia != null)
+                  _Etiqueta(
+                    texto: usuario.pausaAsistencia ? 'Presente · en pausa' : 'Presente',
+                    color: usuario.pausaAsistencia ? context.dominio.advertencia : context.colores.onSurfaceVariant,
+                    fondo: usuario.pausaAsistencia
+                        ? context.dominio.advertenciaContenedor
+                        : context.colores.surfaceContainerHighest,
                     icono: Icons.face_retouching_natural_outlined,
                   ),
                 if (estado != null) _Etiqueta(texto: estado.texto, color: estado.color, fondo: estado.fondo, icono: estado.icono),
@@ -492,6 +504,35 @@ class _HojaEmpleadoState extends ConsumerState<_HojaEmpleado> {
     );
   }
 
+  /// Pausar libera su cupo del plan de esa app; en la otra sigue igual.
+  Future<void> _pausar(String aplicativo, bool pausada) async {
+    final app = aplicativo == 'INVENTARIO' ? 'Ventario' : 'Presente';
+    if (pausada) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (d) => AlertDialog(
+          title: Text('¿Pausar a ${u.nombre} en $app?'),
+          content: Text(
+            'No podrá entrar a $app y deja libre su cupo del plan de esa app. '
+            'Conserva su cuenta y sus datos: puedes reactivarla cuando haya cupo.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancelar')),
+            FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Pausar')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    await _ejecutar(
+      () async {
+        await ref.read(authRepositoryProvider).pausarUsuario(u.uuid, aplicativo: aplicativo, pausada: pausada);
+        ref.invalidate(empresaProvider);
+      },
+      pausada ? '${u.nombre} quedó en pausa en $app' : '${u.nombre} ya puede entrar a $app',
+    );
+  }
+
   Future<void> _darDeBaja() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -545,7 +586,7 @@ class _HojaEmpleadoState extends ConsumerState<_HojaEmpleado> {
               child: EncabezadoHoja(
                 titulo: u.nombre,
                 subtitulo: [
-                  _etiquetaInventario(u),
+                  _etiquetaRol(u),
                   if (u.sedes.isNotEmpty) u.sedes.map((s) => s.nombre).join(', '),
                 ].join(' · '),
               ),
@@ -604,6 +645,22 @@ class _HojaEmpleadoState extends ConsumerState<_HojaEmpleado> {
                   ),
                 ),
             ],
+            if (!propio && u.activo && !u.rol.esDirector && u.conAccesoInventario)
+              ListTile(
+                enabled: !_enviando,
+                leading: Icon(u.pausaInventario ? Icons.play_circle_outline_rounded : Icons.pause_circle_outline_rounded),
+                title: Text(u.pausaInventario ? 'Reactivar en Ventario' : 'Pausar en Ventario'),
+                subtitle: const Text('Cuando el plan no alcanza para todos'),
+                onTap: () => _pausar('INVENTARIO', !u.pausaInventario),
+              ),
+            if (!propio && soyDirector && u.activo && u.rolAsistencia != null && u.rolAsistencia != 'ADMIN')
+              ListTile(
+                enabled: !_enviando,
+                leading: Icon(u.pausaAsistencia ? Icons.play_circle_outline_rounded : Icons.pause_circle_outline_rounded),
+                title: Text(u.pausaAsistencia ? 'Reactivar en Presente' : 'Pausar en Presente'),
+                subtitle: const Text('En Ventario sigue igual'),
+                onTap: () => _pausar('ASISTENCIA', !u.pausaAsistencia),
+              ),
             if (!propio) ...[
               ListTile(
                 enabled: !_enviando,
@@ -674,32 +731,41 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
   late final _documento = TextEditingController(text: widget.usuario?.documento ?? '');
   final _password = TextEditingController();
 
-  /// Rol en Inventario; null = la cuenta solo usa Control de Personal.
-  late RolUsuario? _rol = _rolInventarioDe(widget.usuario);
-
-  /// Rol en Control de Personal ('GERENTE', 'OPERADOR'; 'ADMIN' va con el
-  /// director) o null = sin acceso a esa app.
-  late String? _rolAsistencia = widget.usuario?.rolAsistencia;
+  /// Un solo rol: decide a qué app entra (ver [RolCuenta]).
+  late RolCuenta? _rol = widget.usuario == null ? RolCuenta.vendedor : widget.usuario!.rolCuenta;
   late Set<String> _sedes = {...?widget.usuario?.sedes.map((s) => s.uuid)};
   bool _marcaAsistencia = false;
   bool _ocultar = true;
   bool _guardando = false;
 
+  /// Documento de la persona de Presente elegida: la cuenta se une a su ficha
+  /// (no ocupa otro cupo ni se reescriben sus datos).
+  String? _personaLigada;
+
   bool get _esEdicion => widget.usuario != null;
 
-  static RolUsuario? _rolInventarioDe(UsuarioAdmin? u) {
-    if (u == null) return RolUsuario.vendedor;
-    return u.conAccesoInventario ? u.rol : null;
-  }
+  void _elegirRol(RolCuenta r) => setState(() {
+        _rol = r;
+        if (!r.conSedes) _sedes = {};
+        // Pasar de gerente a vendedor deja varias sedes: se conserva la primera.
+        if (r.unaSede && _sedes.length > 1) _sedes = {_sedes.first};
+      });
 
-  /// El director lo es en las dos apps: su rol de asistencia no se elige.
-  String? _rolAsistenciaEfectivo(bool hayAsistencia) {
-    if (!hayAsistencia) return _esEdicion ? widget.usuario!.rolAsistencia : null;
-    return _rol == RolUsuario.director ? 'ADMIN' : _rolAsistencia;
+  Future<void> _elegirPersona(Sede sede) async {
+    final persona = await showModalBottomSheet<({String documento, String nombre, String? cargo})>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _HojaPersonas(sede: sede),
+    );
+    if (persona == null || !mounted) return;
+    setState(() {
+      _nombre.text = persona.nombre;
+      _documento.text = persona.documento;
+      _personaLigada = persona.documento;
+      _marcaAsistencia = false;
+    });
   }
-
-  /// Gerente en cualquiera de las dos apps: gestiona varias sedes.
-  bool get _variasSedes => _rol == RolUsuario.gerente || (_rol == null && _rolAsistencia == 'GERENTE');
 
   @override
   void dispose() {
@@ -713,28 +779,27 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
 
   Future<void> _guardar(bool hayAsistencia) async {
     if (!(_formulario.currentState?.validate() ?? false)) return;
-    final rolAsistencia = _rolAsistenciaEfectivo(hayAsistencia);
-    if (_rol == null && rolAsistencia == null) {
-      mostrarMensaje(context, 'Dale acceso a al menos una app', esError: true);
+    final rol = _rol;
+    if (rol == null) {
+      mostrarMensaje(context, 'Elige un rol para la cuenta', esError: true);
       return;
     }
-    if ((_rol?.esDeUnaSede ?? false) && _sedes.length != 1) {
+    if (rol.unaSede && _sedes.length != 1) {
       mostrarMensaje(context, 'Elige la sede donde trabaja', esError: true);
       return;
     }
-    if (_variasSedes && _sedes.isEmpty) {
+    if (rol == RolCuenta.gerente && _sedes.isEmpty) {
       mostrarMensaje(context, 'Elige al menos una sede para el gerente', esError: true);
       return;
     }
     setState(() => _guardando = true);
 
-    final sedes = _rol == RolUsuario.director ? <String>[] : _sedes.toList();
+    final sedes = rol.conSedes ? _sedes.toList() : <String>[];
     final documento = _documento.text.trim();
     try {
       final repo = ref.read(authRepositoryProvider);
       if (_esEdicion) {
         final antes = widget.usuario!;
-        final rolAntes = _rolInventarioDe(antes);
         final cambiaronSedes = ({...antes.sedes.map((s) => s.uuid)}.length != sedes.length) ||
             !sedes.every((s) => antes.sedes.any((x) => x.uuid == s));
         final propio = antes.uuid == ref.read(sesionProvider).value?.usuarioUuid;
@@ -742,17 +807,18 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
         // El gerente que se edita a sí mismo no puede tocar su rol ni sus
         // sedes (el servidor lo rechazaría): esos campos no viajan.
         final puedeTocarRol = !propio || soyDirector;
-        final cambiaRol = puedeTocarRol && _rol != rolAntes;
-        final cambiaRolAsistencia = puedeTocarRol && rolAsistencia != antes.rolAsistencia;
+        final cambiaRol = puedeTocarRol && rol != antes.rolCuenta;
         await repo.actualizarUsuario(
           antes.uuid,
           nombre: _nombre.text.trim(),
           email: _email.text.trim(),
-          rol: cambiaRol ? _rol : null,
-          quitarAccesoInventario: cambiaRol && _rol == null,
-          cambiarRolAsistencia: cambiaRolAsistencia,
-          rolAsistencia: rolAsistencia,
-          sedes: puedeTocarRol && (cambiaronSedes || cambiaRol || cambiaRolAsistencia) ? sedes : null,
+          // El rol viaja completo (uno por app) para que el servidor no
+          // conserve un rol de la otra app que ya no corresponde.
+          rol: cambiaRol ? rol.inventario : null,
+          quitarAccesoInventario: cambiaRol && rol.inventario == null,
+          cambiarRolAsistencia: cambiaRol,
+          rolAsistencia: rol.asistencia,
+          sedes: puedeTocarRol && (cambiaronSedes || cambiaRol) ? sedes : null,
           password: _password.text.isEmpty ? null : _password.text,
         );
       } else {
@@ -760,10 +826,11 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
           nombre: _nombre.text.trim(),
           email: _email.text.trim(),
           password: _password.text,
-          rol: _rol,
-          rolAsistencia: rolAsistencia,
+          rol: rol.inventario,
+          rolAsistencia: rol.asistencia,
           documento: documento.isEmpty ? null : documento,
-          marcaAsistencia: hayAsistencia && _marcaAsistencia,
+          // Ligada a una persona de Presente, su ficha ya existe.
+          marcaAsistencia: hayAsistencia && _marcaAsistencia && _personaLigada == null,
           telefono: _telefono.text.trim(),
           sedes: sedes,
         );
@@ -787,17 +854,25 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
     final soyDirector = sesion?.rol.esDirector ?? false;
     final propio = widget.usuario?.uuid == sesion?.usuarioUuid;
     final misSedes = ref.watch(misSedesProvider).value ?? const <Sede>[];
-    // Sin saber aún si la empresa usa Control de Personal, la sección no se
+    // Sin saber aún si la empresa usa Presente, la sección no se
     // muestra: mejor ocultarla un instante que ofrecer algo que no existe.
     final hayAsistencia = ref.watch(empresaProvider).value?.tieneAsistencia ?? false;
-    // El gerente sólo da de alta vendedores y auxiliares: crear gerentes sería
-    // repartir privilegios que no le corresponden.
-    final rolesPosibles = soyDirector
-        ? RolUsuario.values
-        : const [RolUsuario.vendedor, RolUsuario.auxiliarInventario];
+    // El gerente sólo da de alta vendedores, auxiliares y operarios: crear
+    // gerentes sería repartir privilegios que no le corresponden.
+    final rolesPosibles = [
+      for (final r in soyDirector ? RolCuenta.values : RolCuenta.asignablesPorGerente)
+        if (hayAsistencia || !r.soloPresente) r,
+    ];
     final puedeTocarRol = (!propio || soyDirector) && (_rol == null || rolesPosibles.contains(_rol));
-    final rolesAsistencia = soyDirector ? const ['GERENTE', 'OPERADOR'] : const ['OPERADOR'];
-    final sedeUnica = _rol?.esDeUnaSede ?? false;
+    final sedeUnica = _rol?.unaSede ?? false;
+    final grupos = [
+      ('En las dos apps', Icons.apps_rounded, [RolCuenta.director, RolCuenta.gerente]),
+      ('Solo Ventario', Icons.inventory_2_outlined, [RolCuenta.vendedor, RolCuenta.auxiliar]),
+      ('Solo Presente', Icons.face_retouching_natural_outlined, [RolCuenta.talentoHumano, RolCuenta.operario]),
+    ];
+    final sedeParaPersona = sedeUnica && _sedes.length == 1
+        ? misSedes.where((s) => s.uuid == _sedes.first).firstOrNull
+        : null;
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -866,71 +941,44 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
                   },
                 ),
                 if (puedeTocarRol) ...[
-                  const SizedBox(height: 20),
-                  _TituloApp(icono: Icons.inventory_2_outlined, titulo: 'Rol en Ventario'),
-                  const SizedBox(height: 4),
-                  RadioGroup<RolUsuario?>(
+                  RadioGroup<RolCuenta>(
                     groupValue: _rol,
-                    onChanged: (r) => setState(() {
-                      _rol = r;
-                      // Pasar de gerente a vendedor deja varias sedes: se
-                      // conserva sólo la primera.
-                      if ((_rol?.esDeUnaSede ?? false) && _sedes.length > 1) _sedes = {_sedes.first};
-                      if (_rol == RolUsuario.director) _sedes = {};
-                    }),
+                    onChanged: (r) {
+                      if (r != null) _elegirRol(r);
+                    },
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        for (final r in rolesPosibles)
-                          RadioListTile<RolUsuario?>(
-                            value: r,
-                            contentPadding: EdgeInsets.zero,
-                            dense: true,
-                            title: Text(r.etiqueta),
-                            subtitle: Text(_descripcionRol(r)),
-                          ),
-                        if (hayAsistencia)
-                          const RadioListTile<RolUsuario?>(
-                            value: null,
-                            contentPadding: EdgeInsets.zero,
-                            dense: true,
-                            title: Text('Sin acceso a Ventario'),
-                            subtitle: Text('Solo usa Presente.'),
-                          ),
+                        for (final (titulo, icono, roles) in grupos)
+                          if (roles.any(rolesPosibles.contains)) ...[
+                            const SizedBox(height: 16),
+                            _TituloApp(icono: icono, titulo: titulo),
+                            for (final r in roles)
+                              if (rolesPosibles.contains(r))
+                                RadioListTile<RolCuenta>(
+                                  value: r,
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                  title: Text(r.etiqueta),
+                                  subtitle: Text(r.descripcion),
+                                ),
+                          ],
                       ],
                     ),
                   ),
-                  if (hayAsistencia) ...[
-                    const SizedBox(height: 16),
-                    _TituloApp(icono: Icons.face_retouching_natural_outlined, titulo: 'Rol en Presente'),
+                  if (_rol != null && !_rol!.conSedes) ...[
                     const SizedBox(height: 8),
-                    if (_rol == RolUsuario.director)
-                      Text(
-                        'Como director, también administra Presente.',
-                        style: context.textos.bodySmall?.copyWith(color: context.colores.onSurfaceVariant),
-                      )
-                    else
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          ChoiceChip(
-                            label: const Text('Sin acceso'),
-                            selected: _rolAsistencia == null,
-                            onSelected: (_) => setState(() => _rolAsistencia = null),
-                          ),
-                          for (final r in rolesAsistencia)
-                            ChoiceChip(
-                              label: Text(_etiquetaAsistencia(r)),
-                              selected: _rolAsistencia == r,
-                              onSelected: (_) => setState(() => _rolAsistencia = r),
-                            ),
-                        ],
-                      ),
+                    Text(
+                      _rol == RolCuenta.director
+                          ? 'El director ve todas las sedes.'
+                          : 'Trabaja en todas las sedes de Presente: no se le asignan sedes.',
+                      style: context.textos.bodySmall?.copyWith(color: context.colores.onSurfaceVariant),
+                    ),
                   ],
-                  if (_rol != RolUsuario.director && (_rol != null || _rolAsistencia != null)) ...[
+                  if (_rol?.conSedes ?? false) ...[
                     const SizedBox(height: 16),
                     Text(
-                      _variasSedes ? 'Sedes que gestiona' : 'Sede donde trabaja',
+                      _rol == RolCuenta.gerente ? 'Sedes que gestiona' : 'Sede donde trabaja',
                       style: context.textos.titleSmall,
                     ),
                     const SizedBox(height: 8),
@@ -953,10 +1001,47 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
                               ChoiceChip(
                                 label: Text(s.nombre),
                                 selected: _sedes.contains(s.uuid),
-                                onSelected: (_) => setState(() => _sedes = {s.uuid}),
+                                onSelected: (_) => setState(() {
+                                  _sedes = {s.uuid};
+                                  // La persona elegida era de otra sede.
+                                  if (_personaLigada != null) _personaLigada = null;
+                                }),
                               ),
                         ],
                       ),
+                    if (!_esEdicion && hayAsistencia && sedeParaPersona != null) ...[
+                      const SizedBox(height: 12),
+                      if (_personaLigada == null)
+                        OutlinedButton.icon(
+                          onPressed: () => _elegirPersona(sedeParaPersona),
+                          icon: const Icon(Icons.badge_outlined),
+                          label: Text('Elegir persona registrada en ${sedeParaPersona.nombre}'),
+                        )
+                      else
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: context.dominio.exitoContenedor,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.link_rounded, color: context.dominio.exito, size: 20),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'Se une a su ficha de Presente: no ocupa otro cupo ni se repiten sus datos.',
+                                  style: context.textos.bodySmall?.copyWith(color: context.dominio.exito),
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: () => setState(() => _personaLigada = null),
+                                child: const Text('Quitar'),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
                     if (_esEdicion && _sedes.isNotEmpty && widget.usuario!.sedes.isNotEmpty &&
                         !_sedes.contains(widget.usuario!.sedes.first.uuid) && sedeUnica)
                       Padding(
@@ -970,7 +1055,7 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
                   ],
                 ],
                 if (hayAsistencia) ...[
-                  if (!_esEdicion) ...[
+                  if (!_esEdicion && _personaLigada == null && !(_rol?.soloPresente ?? false)) ...[
                     const SizedBox(height: 12),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
@@ -1013,19 +1098,57 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
     );
   }
 
-  static String _descripcionRol(RolUsuario r) => switch (r) {
-        RolUsuario.director => 'Ve y gestiona todas las sedes, el personal y los costos, en las dos apps.',
-        RolUsuario.gerente => 'Gestiona catálogo, stock y personal de sus sedes; aprueba traslados y ajustes.',
-        RolUsuario.auxiliarInventario => 'Registra entradas; sus conteos y mermas los aprueba el gerente. No vende.',
-        RolUsuario.vendedor => 'Vende y consulta. No ve costos ni edita el catálogo.',
-      };
 }
 
-String _etiquetaAsistencia(String rol) => switch (rol) {
-      'ADMIN' => 'Administrador',
-      'GERENTE' => 'Gerente',
-      _ => 'Operador de kiosco',
-    };
+/// Personas que ya marcan asistencia en la sede y no tienen cuenta.
+class _HojaPersonas extends ConsumerWidget {
+  const _HojaPersonas({required this.sede});
+  final Sede sede;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return SafeArea(
+      child: FutureBuilder(
+        future: ref.read(authRepositoryProvider).personasSinCuenta(sede.uuid),
+        builder: (context, snap) {
+          final lista = snap.data;
+          return ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+            children: [
+              EncabezadoHoja(
+                titulo: 'Personas de ${sede.nombre}',
+                subtitulo: 'Registradas en Presente y aún sin cuenta',
+              ),
+              const SizedBox(height: 12),
+              if (snap.hasError)
+                Text(_textoError(snap.error!), style: context.textos.bodyMedium?.copyWith(color: context.dominio.peligro))
+              else if (lista == null)
+                const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()))
+              else if (lista.isEmpty)
+                Text(
+                  'No hay personas sin cuenta en esta sede. Escribe sus datos a mano.',
+                  style: context.textos.bodyMedium?.copyWith(color: context.colores.onSurfaceVariant),
+                )
+              else
+                for (final p in lista)
+                  Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: ListTile(
+                      leading: const Icon(Icons.person_outline_rounded),
+                      title: Text(p.nombre),
+                      subtitle: Text([p.documento, ?p.cargo].join(' · ')),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.pop(context, p),
+                    ),
+                  ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
 
 class _TituloApp extends StatelessWidget {
   const _TituloApp({required this.icono, required this.titulo});

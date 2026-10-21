@@ -12,7 +12,7 @@ import '../../cuenta/presentation/plan_ui.dart';
 import '../data/gestion_api.dart';
 
 final _sedesAdminProvider = FutureProvider.autoDispose<List<SedeAdmin>>(
-  (ref) => ref.watch(gestionApiProvider).sedes(),
+  (ref) => ref.watch(gestionApiProvider).sedesParaAdministrar(),
 );
 
 String _textoError(Object e) => e is ApiException ? e.mensajeUsuario : '$e';
@@ -24,6 +24,10 @@ String _textoError(Object e) => e is ApiException ? e.mensajeUsuario : '$e';
 /// Una sede nueva llega a los teléfonos con la siguiente sincronización. La
 /// principal no se puede desactivar: es a donde va todo lo que llega sin sede
 /// (la app vieja, por ejemplo).
+///
+/// Las sedes son de la empresa (compartidas con Presente), pero Ventario solo
+/// trabaja en las que se eligen para él, hasta el límite de SU plan. Elegir una
+/// no se puede deshacer. Crear una sede aquí la elige para Ventario.
 class SedesPage extends ConsumerWidget {
   const SedesPage({super.key});
 
@@ -48,15 +52,26 @@ class SedesPage extends ConsumerWidget {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
             children: [
-              if (plan != null && !plan.sedes.ilimitado) ...[
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: MedidorUso(recurso: RecursoLimitado.sedes, uso: plan.sedes),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Las sedes se comparten con Presente, pero cada app usa solo las que eliges para ella, '
+                        'hasta el límite de su plan.',
+                        style: context.textos.bodySmall?.copyWith(color: context.colores.onSurfaceVariant),
+                      ),
+                      if (plan != null && !plan.sedes.ilimitado) ...[
+                        const SizedBox(height: 12),
+                        MedidorUso(recurso: RecursoLimitado.sedes, uso: plan.sedes),
+                      ],
+                    ],
                   ),
                 ),
-                const SizedBox(height: 12),
-              ],
+              ),
+              const SizedBox(height: 12),
               for (final (i, s) in lista.indexed)
                 EntradaEscalonada(
                   indice: i,
@@ -81,14 +96,37 @@ class SedesPage extends ConsumerWidget {
                           ],
                         ],
                       ),
-                      subtitle: Text(
-                        [
-                          if (!s.activo) 'Desactivada',
-                          ?s.direccion,
-                          ?s.telefono,
-                        ].join(' · ').ifEmpty('Sin dirección'),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            [
+                              if (!s.activo) 'Desactivada',
+                              ?s.direccion,
+                              ?s.telefono,
+                            ].join(' · ').ifEmpty('Sin dirección'),
+                          ),
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            children: [
+                              if (s.elegida)
+                                _Uso(texto: 'En Ventario', color: context.dominio.exito, fondo: context.dominio.exitoContenedor),
+                              if (s.elegidaPresente ?? false)
+                                _Uso(
+                                  texto: 'En Presente',
+                                  color: context.colores.onSurfaceVariant,
+                                  fondo: context.colores.surfaceContainerHighest,
+                                ),
+                            ],
+                          ),
+                        ],
                       ),
-                      trailing: const Icon(Icons.chevron_right_rounded),
+                      isThreeLine: true,
+                      trailing: !s.elegida && s.activo
+                          ? TextButton(onPressed: () => _elegir(context, ref, s, plan), child: const Text('Usar en Ventario'))
+                          : const Icon(Icons.chevron_right_rounded),
                     ),
                   ),
                 ),
@@ -108,6 +146,42 @@ class SedesPage extends ConsumerWidget {
     );
   }
 
+  /// Confirma (es irrevocable) y elige la sede para Ventario.
+  Future<void> _elegir(BuildContext context, WidgetRef ref, SedeAdmin sede, PlanEmpresa? plan) async {
+    final sedes = plan?.sedes;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        icon: Icon(Icons.storefront_outlined, color: d.colores.primary),
+        title: Text('¿Usar ${sede.nombre} en Ventario?'),
+        content: Text(
+          [
+            'Ventario empezará a trabajar en esta sede: ventas, stock, traslados y personal.',
+            'Esta elección no se puede deshacer.',
+            if (sedes != null && sedes.maximo != null)
+              'Tu plan de Ventario permite ${sedes.maximo} sede${sedes.maximo == 1 ? '' : 's'} y ya usas ${sedes.usados}.',
+          ].join('\n\n'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Sí, usarla')),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    try {
+      await ref.read(gestionApiProvider).elegirSede(sede.uuid);
+      ref.invalidate(_sedesAdminProvider);
+      ref.invalidate(empresaProvider);
+      ref.read(syncEngineProvider).solicitar();
+      if (context.mounted) mostrarMensaje(context, '${sede.nombre} ya está en Ventario', esExito: true);
+    } catch (e) {
+      if (!context.mounted) return;
+      if (await manejarLimite(context, e)) return;
+      if (context.mounted) mostrarMensaje(context, _textoError(e), esError: true);
+    }
+  }
+
   Future<void> _formulario(BuildContext context, WidgetRef ref, {SedeAdmin? sede}) async {
     final ok = await showModalBottomSheet<bool>(
       context: context,
@@ -120,6 +194,20 @@ class SedesPage extends ConsumerWidget {
       ref.read(syncEngineProvider).solicitar();
     }
   }
+}
+
+class _Uso extends StatelessWidget {
+  const _Uso({required this.texto, required this.color, required this.fondo});
+  final String texto;
+  final Color color;
+  final Color fondo;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(color: fondo, borderRadius: BorderRadius.circular(999)),
+        child: Text(texto, style: context.textos.labelSmall?.copyWith(color: color)),
+      );
 }
 
 extension on String {

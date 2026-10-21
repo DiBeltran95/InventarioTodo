@@ -45,8 +45,9 @@ enum RecursoLimitado {
   static RecursoLimitado? desdeApi(Object? v) => values.where((r) => r.api == v).firstOrNull;
 }
 
-/// Plan vigente de la empresa y su uso, tal como lo mandan los backends
-/// (docs/PLATAFORMA.md).
+/// Plan vigente de una app de la empresa y su uso, tal como lo mandan los
+/// backends (docs/PLATAFORMA.md). Cada app tiene el suyo: pagar Presente no
+/// cambia el de Ventario.
 @immutable
 class PlanEmpresa {
   const PlanEmpresa({
@@ -57,8 +58,11 @@ class PlanEmpresa {
     required this.productos,
     this.vence,
     this.vencido = false,
+    this.aplicativo = 'INVENTARIO',
   });
 
+  /// INVENTARIO (Ventario) o ASISTENCIA (Presente).
+  final String aplicativo;
   final String codigo;
   final String nombre;
   final DateTime? vence;
@@ -68,6 +72,12 @@ class PlanEmpresa {
   final RecursoPlan productos;
 
   bool get esGratis => codigo == 'GRATIS';
+  bool get esVentario => aplicativo == 'INVENTARIO';
+  String get nombreApp => esVentario ? 'Ventario' : 'Presente';
+
+  /// Los productos solo existen en Ventario.
+  List<RecursoLimitado> get recursos =>
+      esVentario ? RecursoLimitado.values : const [RecursoLimitado.sedes, RecursoLimitado.personas];
 
   RecursoPlan de(RecursoLimitado r) => switch (r) {
         RecursoLimitado.sedes => sedes,
@@ -78,6 +88,7 @@ class PlanEmpresa {
   static PlanEmpresa? desdeJson(Object? j) {
     if (j is! Map) return null;
     return PlanEmpresa(
+      aplicativo: j['aplicativo'] as String? ?? 'INVENTARIO',
       codigo: j['codigo'] as String? ?? 'GRATIS',
       nombre: j['nombre'] as String? ?? 'Gratis',
       vence: DateTime.tryParse(j['vence'] as String? ?? ''),
@@ -89,6 +100,7 @@ class PlanEmpresa {
   }
 
   Map<String, dynamic> aJson() => {
+        'aplicativo': aplicativo,
         'codigo': codigo,
         'nombre': nombre,
         'vence': vence?.toIso8601String().substring(0, 10),
@@ -109,6 +121,7 @@ class EmpresaInfo {
     this.telefono,
     this.email,
     this.plan,
+    this.planPresente,
     this.aplicativos = const [],
   });
 
@@ -117,14 +130,19 @@ class EmpresaInfo {
   final String? nit;
   final String? telefono;
   final String? email;
+
+  /// Plan de Ventario (esta app) y de Presente: cada app tiene el suyo.
   final PlanEmpresa? plan;
+  final PlanEmpresa? planPresente;
   final List<String> aplicativos;
 
   bool get tieneAsistencia => aplicativos.contains('ASISTENCIA');
 
   factory EmpresaInfo.desdeJson(Map<String, dynamic> j) {
     final e = j['empresa'] as Map<String, dynamic>;
+    final planes = j['planes'];
     return EmpresaInfo(
+      planPresente: planes is Map ? PlanEmpresa.desdeJson(planes['ASISTENCIA']) : null,
       uuid: e['uuid'] as String,
       nombre: e['nombre'] as String,
       nit: e['nit'] as String?,

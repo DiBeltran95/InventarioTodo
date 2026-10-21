@@ -6,6 +6,7 @@ import {
   huellaAlcance,
   puedeAdministrar,
   validarSedesDeRol,
+  normalizarRoles,
 } from '../src/domain/alcance.js';
 import {
   puedeSolicitar,
@@ -75,15 +76,34 @@ test('un gerente tampoco administra a quien es gerente o administrador en Contro
   assert.equal(puedeAdministrar(gestor, { rol: 'VENDEDOR', rol_asistencia: 'OPERADOR', sedeIds: [2] }), true);
 });
 
-test('roles por app: al menos una, el administrador lo es en las dos', () => {
-  assert.match(validarSedesDeRol(null, [], null), /al menos una app/);
-  assert.equal(validarSedesDeRol(null, [], 'OPERADOR'), null, 'el operador atiende cualquier sede');
+test('roles por app: cada uno con sus sedes', () => {
+  assert.match(validarSedesDeRol(null, [], null), /Elige un rol/);
+  assert.equal(validarSedesDeRol(null, [], 'OPERARIO'), null, 'el operario atiende cualquier sede');
+  assert.equal(validarSedesDeRol(null, [], 'TALENTO_HUMANO'), null, 'talento humano ve todas las sedes');
+  assert.match(validarSedesDeRol(null, [2], 'OPERARIO'), /no se les asignan sedes/);
   assert.match(validarSedesDeRol(null, [], 'GERENTE'), /al menos una/);
   assert.equal(validarSedesDeRol('ADMIN', [], 'ADMIN'), null);
   assert.match(validarSedesDeRol('ADMIN', [], 'GERENTE'), /en las dos apps/);
   assert.match(validarSedesDeRol('GERENTE', [2], 'ADMIN'), /en las dos apps/);
   assert.equal(validarSedesDeRol('GERENTE', [2, 3], 'GERENTE'), null, 'gerente de las mismas sedes en ambas');
   assert.match(validarSedesDeRol('VENDEDOR', [2, 3], 'GERENTE'), /exactamente una/);
+});
+
+test('roles coherentes por app: admin y gerente en las dos, el resto en una', () => {
+  assert.deepEqual(normalizarRoles('ADMIN', null), { rol: 'ADMIN', rolAsistencia: 'ADMIN' });
+  assert.deepEqual(normalizarRoles('GERENTE', null), { rol: 'GERENTE', rolAsistencia: 'GERENTE' });
+  assert.deepEqual(normalizarRoles(null, 'GERENTE'), { rol: 'GERENTE', rolAsistencia: 'GERENTE' });
+  assert.deepEqual(normalizarRoles('VENDEDOR', null), { rol: 'VENDEDOR', rolAsistencia: null });
+  assert.deepEqual(normalizarRoles(null, 'OPERARIO'), { rol: null, rolAsistencia: 'OPERARIO' });
+  assert.deepEqual(normalizarRoles(null, 'TALENTO_HUMANO'), { rol: null, rolAsistencia: 'TALENTO_HUMANO' });
+  assert.ok(normalizarRoles('VENDEDOR', 'OPERARIO').error, 'vendedor es solo de Ventario');
+  assert.ok(normalizarRoles('ADMIN', 'GERENTE').error, 'mismo rol en las dos');
+});
+
+test('el gerente gestiona al operario, no a talento humano', () => {
+  const gerente = { rol: 'GERENTE', alcance: { sedeIds: [2] } };
+  assert.equal(puedeAdministrar(gerente, { rol: null, rol_asistencia: 'OPERARIO', sedeIds: [] }), true);
+  assert.equal(puedeAdministrar(gerente, { rol: null, rol_asistencia: 'TALENTO_HUMANO', sedeIds: [] }), false);
 });
 
 test('cada rol tiene el número de sedes que le corresponde', () => {

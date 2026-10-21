@@ -31,7 +31,7 @@ import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
 import { hashearPassword, verificarPassword, login } from '../auth/service.js';
 import { passwordSchema, dispositivoSchema } from '../auth/schemas.js';
 import { traducirErrorSql } from '../../middleware/errorHandler.js';
-import { planDeEmpresa, aplicativosDeEmpresa } from './repo.js';
+import { planDeEmpresa, planesDeEmpresa, aplicativosDeEmpresa } from './repo.js';
 
 const texto = (min, max) => z.string().trim().min(min).max(max);
 const opcional = (max) => z.string().trim().max(max).optional().nullable().transform((v) => v || null);
@@ -129,6 +129,7 @@ async function verEmpresa(empresaId) {
   return {
     empresa,
     plan: await planDeEmpresa(empresaId),
+    planes: await planesDeEmpresa(empresaId),
     aplicativos: await aplicativosDeEmpresa(empresaId),
   };
 }

@@ -155,7 +155,7 @@ export function perfilPublico(u) {
  */
 const SELECT_USUARIO = `
   SELECT u.id, u.uuid, u.empresa_id, u.nombre, u.email, u.password_hash, u.rol, u.rol_asistencia,
-         u.activo, u.restringir_horario, u.horario, u.acceso_extra_hasta,
+         u.activo, u.pausa_inventario, u.restringir_horario, u.horario, u.acceso_extra_hasta,
          e.uuid AS empresa_uuid, e.nombre AS empresa_nombre,
          e.estado AS empresa_estado, e.deleted_at AS empresa_borrada,
          ea.activo AS app_habilitada
@@ -332,7 +332,7 @@ export async function refrescar({ refresh_token: recibido, dispositivo }, userAg
         conn,
         `SELECT rt.id, rt.usuario_id, rt.familia, rt.expires_at, rt.revoked_at,
                 u.uuid, u.empresa_id, u.nombre, u.email, u.rol, u.rol_asistencia, u.activo,
-                u.restringir_horario, u.horario, u.acceso_extra_hasta,
+                u.pausa_inventario, u.restringir_horario, u.horario, u.acceso_extra_hasta,
                 e.estado AS empresa_estado, e.deleted_at AS empresa_borrada,
                 ea.activo AS app_habilitada
            FROM refresh_tokens rt
