@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:shimmer/shimmer.dart';
@@ -255,7 +257,15 @@ class _PintorCheck extends CustomPainter {
       anterior.progreso != progreso || anterior.color != color;
 }
 
+/// Aviso flotante vigente (se reemplaza si llega otro).
+OverlayEntry? _avisoFlotante;
+
 /// Snackbar con identidad, en lugar del gris por defecto.
+///
+/// Desde una hoja inferior o un diálogo, el snackbar quedaría DETRÁS de ellos
+/// (pertenece a la pantalla de abajo) y la persona no vería el error: tocaría
+/// el botón otra vez creyendo que no pasó nada. Ahí el aviso flota encima de
+/// todo, arriba de la pantalla.
 void mostrarMensaje(
   BuildContext context,
   String texto, {
@@ -274,6 +284,59 @@ void mostrarMensaje(
               context.colores.onInverseSurface,
               Icons.info_outline_rounded,
             );
+
+  if (ModalRoute.of(context) is PopupRoute) {
+    final overlay = Overlay.maybeOf(context, rootOverlay: true);
+    if (overlay != null) {
+      _avisoFlotante?.remove();
+      late final OverlayEntry entrada;
+      void quitar() {
+        if (_avisoFlotante == entrada) _avisoFlotante = null;
+        if (entrada.mounted) entrada.remove();
+      }
+
+      entrada = OverlayEntry(
+        builder: (_) => Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Semantics(
+                liveRegion: true,
+                child: Material(
+                  color: fondo,
+                  elevation: 6,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: quitar,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      child: Row(
+                        children: [
+                          Icon(icono, color: frente, size: 20),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(texto, style: TextStyle(color: frente, fontWeight: FontWeight.w500)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      _avisoFlotante = entrada;
+      overlay.insert(entrada);
+      Timer(duracion + const Duration(seconds: 1), quitar);
+      return;
+    }
+  }
 
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()

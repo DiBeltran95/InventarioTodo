@@ -553,34 +553,39 @@ class AuthRepository {
         .toList();
   }
 
-  Future<void> crearUsuario({
+  /// Da acceso a Ventario a un empleado. Si ya está registrado (mismo
+  /// documento, p. ej. desde Presente) se usan sus datos; si es nuevo, también
+  /// aparece en Presente (solo le falta el rostro). Sin contraseña: se genera
+  /// al azar y se le avisa por correo que cree la suya.
+  ///
+  /// [cuentaExistente]: ya entraba a Presente y usará la misma cuenta.
+  Future<({bool cuentaExistente, bool avisoEnviado})> crearUsuario({
+    required String uuid,
     required String nombre,
     required String email,
-    required String password,
-    required RolUsuario? rol,
+    required String documento,
+    required RolUsuario rol,
     String? telefono,
     List<String> sedes = const [],
     bool restringirHorario = false,
     List<TramoHorario> horario = const [],
-    String? rolAsistencia,
-    String? documento,
-    bool marcaAsistencia = false,
   }) async {
-    await _api.post('/auth/usuarios', cuerpo: {
+    final r = await _api.post('/auth/usuarios', timeout: const Duration(seconds: 60), cuerpo: {
+      'uuid': uuid,
       'nombre': nombre,
       'email': email,
-      'password': password,
-      // null = sin acceso a Inventario (solo usa Presente).
-      'rol': rol?.api,
-      // La misma cuenta entra a Presente con este rol (null = no).
-      'rol_asistencia': rolAsistencia,
-      if (documento != null && documento.isNotEmpty) 'documento': documento,
-      'marca_asistencia': marcaAsistencia,
+      'documento': documento,
+      'rol': rol.api,
       if (telefono != null && telefono.isNotEmpty) 'telefono': telefono,
       'sedes': sedes,
       'restringir_horario': restringirHorario,
       'horario': [for (final t in horario) t.toJson()],
     });
+    final d = r['data'];
+    return (
+      cuentaExistente: d is Map && d['cuenta_existente'] == true,
+      avisoEnviado: d is Map && d['aviso_enviado'] == true,
+    );
   }
 
   Future<void> actualizarUsuario(
@@ -593,18 +598,16 @@ class AuthRepository {
     List<String>? sedes,
     bool? restringirHorario,
     List<TramoHorario>? horario,
-    bool cambiarRolAsistencia = false,
-    String? rolAsistencia,
-    bool quitarAccesoInventario = false,
+    String? documento,
+    String? telefono,
   }) async {
     await _api.patch('/auth/usuarios/$uuid', cuerpo: {
       // Sólo viajan los campos que cambian: un PATCH con nulos borraría datos.
       'nombre': ?nombre,
       'email': ?email,
-      if (quitarAccesoInventario) 'rol': null else 'rol': ?rol?.api,
-      // Aquí null sí significa algo («sin acceso a Presente»): viaja
-      // solo cuando se cambió a propósito.
-      if (cambiarRolAsistencia) 'rol_asistencia': rolAsistencia,
+      'documento': ?documento,
+      'telefono': ?telefono,
+      'rol': ?rol?.api,
       'activo': ?activo,
       if (password != null && password.isNotEmpty) 'password': password,
       'sedes': ?sedes,
@@ -630,17 +633,12 @@ class AuthRepository {
   Future<void> pausarUsuario(String uuid, {required String aplicativo, required bool pausada}) =>
       _api.post('/auth/usuarios/$uuid/pausa', cuerpo: {'aplicativo': aplicativo, 'pausada': pausada});
 
-  /// Personas que ya marcan asistencia en esa sede (Presente) y aún no tienen
-  /// cuenta: al crear un vendedor se elige una y no se reescriben sus datos.
-  Future<List<({String documento, String nombre, String? cargo})>> personasSinCuenta(String sedeUuid) async {
-    final respuesta = await _api.get('/auth/usuarios/personas', query: {'sede': sedeUuid});
+  /// Empleados ya registrados (en Presente o aquí) que aún no tienen acceso a
+  /// Ventario: se elige uno y no se reescriben sus datos.
+  Future<List<EmpleadoRegistrado>> empleadosSinAcceso({String? q}) async {
+    final respuesta = await _api.get('/auth/usuarios/personas', query: {if (q != null && q.isNotEmpty) 'q': q});
     return [
-      for (final p in respuesta['data'] as List<dynamic>)
-        (
-          documento: (p as Map)['documento'] as String,
-          nombre: p['nombre'] as String,
-          cargo: p['cargo'] as String?,
-        ),
+      for (final p in respuesta['data'] as List<dynamic>) EmpleadoRegistrado.desdeJson(p as Map<String, dynamic>),
     ];
   }
 

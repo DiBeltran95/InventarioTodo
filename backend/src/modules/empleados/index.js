@@ -12,12 +12,16 @@
  * autenticación rechaza su siguiente petición. La app, al recibir
  * CUENTA_DESACTIVADA, cierra la sesión en el teléfono.
  *
- * Plataforma multiempresa: una cuenta es UNA persona para las dos apps, con un
- * rol en cada una (`rol` en Inventario, `rol_asistencia` en Control de
- * Personal; null = no entra). Inactivarla la saca de las dos. Todo se acota a
- * la empresa del gestor, y el cupo de personas del plan lo exige la base
- * (LIMITE_PLAN → 409).
+ * Plataforma multiempresa: el EMPLEADO es uno solo para las dos apps (su
+ * ficha en asis_empleados: documento, nombre, teléfono, correo, sede). Aquí se
+ * le da una cuenta de acceso a Ventario (`rol`); su rol en Presente
+ * (`rol_asistencia`) lo decide Presente y no se toca, salvo el director, que
+ * es administrador en las dos. Todo empleado creado aquí aparece en Presente
+ * (solo le falta el rostro). La contraseña se genera al azar y la persona crea
+ * la suya con «¿Olvidaste tu contraseña?». Todo se acota a la empresa del
+ * gestor, y el cupo de personas del plan lo exige la base (LIMITE_PLAN → 409).
  */
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { query, queryOne } from '../../db/pool.js';
@@ -38,8 +42,9 @@ import {
   veSede,
   esDirector,
   normalizarRoles,
-  ROLES_ASISTENCIA,
 } from '../../domain/alcance.js';
+import { enviarCorreo } from '../../utils/correo.js';
+import { logger } from '../../utils/logger.js';
 import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
 import { hashearPassword } from '../auth/service.js';
 import { passwordSchema } from '../auth/schemas.js';
@@ -58,14 +63,12 @@ const crearSchema = z.object({
   uuid: z.string().uuid().optional(),
   nombre: z.string().min(2).max(120).trim(),
   email: z.string().email().max(191).toLowerCase().trim(),
-  password: passwordSchema,
-  // null = sin acceso a Inventario (p. ej. alguien que solo usa Control de Personal).
-  rol: z.enum(TODOS_LOS_ROLES).nullable().default(ROLES.VENDEDOR),
-  rol_asistencia: z.enum(ROLES_ASISTENCIA).nullable().default(null),
-  documento: z.string().trim().regex(/^[A-Za-z0-9.-]{3,20}$/, 'Documento de 3 a 20 letras o números').optional().nullable(),
-  // También marca asistencia con el rostro: crea su ficha en Control de
-  // Personal (sin fotos; el registro facial se hace en esa app).
-  marca_asistencia: z.boolean().default(false),
+  // Sin contraseña (lo normal): se genera al azar y se le avisa por correo
+  // que cree la suya con «¿Olvidaste tu contraseña?».
+  password: passwordSchema.optional(),
+  rol: z.enum(TODOS_LOS_ROLES).default(ROLES.VENDEDOR),
+  // El empleado es el mismo en Presente: el documento lo identifica en las dos apps.
+  documento: z.string().trim().regex(/^[A-Za-z0-9.-]{3,20}$/, 'Documento de 3 a 20 letras o números'),
   telefono: z.string().max(30).optional().nullable(),
   sedes: z.array(z.string().uuid()).max(50).default([]),
   restringir_horario: z.boolean().default(false),
@@ -75,8 +78,7 @@ const crearSchema = z.object({
 const actualizarSchema = z.object({
   nombre: z.string().min(2).max(120).trim().optional(),
   email: z.string().email().max(191).toLowerCase().trim().optional(),
-  rol: z.enum(TODOS_LOS_ROLES).nullable().optional(),
-  rol_asistencia: z.enum(ROLES_ASISTENCIA).nullable().optional(),
+  rol: z.enum(TODOS_LOS_ROLES).optional(),
   documento: z.string().trim().regex(/^[A-Za-z0-9.-]{3,20}$/, 'Documento de 3 a 20 letras o números').optional().nullable(),
   telefono: z.string().max(30).optional().nullable(),
   activo: z.boolean().optional(),
@@ -103,7 +105,10 @@ const pausaSchema = z.object({
   pausada: z.boolean(),
 });
 
-const personasQuery = z.object({ sede: z.string().uuid() });
+const personasQuery = z.object({
+  sede: z.string().uuid().optional(),
+  q: z.string().trim().max(60).optional(),
+});
 
 // ── Lectura ─────────────────────────────────────────────────────────────────
 
@@ -169,12 +174,12 @@ export async function listar(gestor) {
        FROM usuarios u
        LEFT JOIN usuario_sedes us ON us.usuario_id = u.id
        LEFT JOIN sedes s ON s.id = us.sede_id AND s.deleted_at IS NULL
-      WHERE u.deleted_at IS NULL AND u.empresa_id = ?
+      WHERE u.deleted_at IS NULL AND u.empresa_id = ? AND (u.rol IS NOT NULL OR u.id = ?)
       GROUP BY u.id, u.uuid, u.nombre, u.documento, u.email, u.rol, u.rol_asistencia, u.activo,
                u.pausa_inventario, u.pausa_asistencia, u.telefono, u.restringir_horario,
                u.horario, u.acceso_extra_hasta, u.ultimo_acceso, u.created_at, u.updated_at
       ORDER BY u.nombre`,
-    [gestor.alcance.empresaId],
+    [gestor.alcance.empresaId, gestor.usuario.id],
   );
   const ahora = new Date();
   return filas
@@ -231,25 +236,45 @@ function validarHorario(restringir, horario, rol) {
 }
 
 /**
- * El gerente no puede crear ni convertir a nadie en gerente, director ni
- * talento humano (esos son de toda la empresa). Sí crea vendedores, auxiliares
- * y el operario de los teléfonos de marcación.
+ * El gerente no puede crear ni convertir a nadie en gerente ni director: sería
+ * escalar sus propios privilegios. Sí da acceso de vendedor y auxiliar.
  */
-function exigirRolAsignable(gestor, rol, rolAsistencia = null) {
+function exigirRolAsignable(gestor, rol) {
   if (esDirector(gestor.usuario.rol)) return;
-  if (rol != null && rol !== ROLES.VENDEDOR && rol !== ROLES.AUXILIAR_INVENTARIO) {
-    throw forbidden('Un gerente sólo crea vendedores, auxiliares y operarios', 'ROL_NO_ASIGNABLE');
-  }
-  if (rol == null && rolAsistencia != null && rolAsistencia !== 'OPERARIO') {
-    throw forbidden('Un gerente sólo crea vendedores, auxiliares y operarios', 'ROL_NO_ASIGNABLE');
+  if (rol !== ROLES.VENDEDOR && rol !== ROLES.AUXILIAR_INVENTARIO) {
+    throw forbidden('Un gerente sólo da acceso de vendedor o auxiliar de inventario', 'ROL_NO_ASIGNABLE');
   }
 }
 
-/** Roles coherentes por app, o 400 con el motivo. */
-function rolesFinales(rol, rolAsistencia) {
-  const r = normalizarRoles(rol, rolAsistencia);
-  if (r.error) throw badRequest('ROLES_INVALIDOS', r.error);
-  return r;
+/** Contraseña inicial al azar: nadie la conoce; la persona crea la suya. */
+const passwordAleatoria = () => crypto.randomBytes(24).toString('base64url');
+
+/**
+ * Le avisa a la persona que ya tiene acceso. No lleva contraseña: la crea ella
+ * con «¿Olvidaste tu contraseña?». Si el correo falla, la cuenta queda igual
+ * (puede pedir el código desde la app), por eso no se lanza el error.
+ */
+async function avisarAcceso({ email, nombre }) {
+  try {
+    // Un SMTP lento no debe dejar a la app esperando (y tentada a reenviar).
+    const limite = new Promise((_, rechazar) => setTimeout(() => rechazar(new Error('Tiempo de envío agotado')), 8000));
+    await Promise.race([limite, enviarCorreo({
+      para: email,
+      asunto: 'Ya tienes acceso a Ventario',
+      texto:
+        `Hola, ${nombre}.\n\n` +
+        'Tu empresa te dio acceso a Ventario con este correo.\n\n' +
+        'Para entrar por primera vez:\n' +
+        '  1. Abre la app Ventario.\n' +
+        '  2. Toca «¿Olvidaste tu contraseña?» y escribe este correo.\n' +
+        '  3. Te llegará un código para crear tu contraseña.\n\n' +
+        'Si no esperabas este correo, ignóralo.\n',
+    })]);
+    return true;
+  } catch (e) {
+    logger.warn({ err: e.message, email }, 'No se pudo enviar el aviso de acceso');
+    return false;
+  }
 }
 
 async function contarDirectoresActivos(conn, empresaId) {
@@ -266,12 +291,9 @@ async function contarDirectoresActivos(conn, empresaId) {
  * con el rostro). Va sin fotos: el registro facial se hace en esa app. Ligada,
  * la persona cuenta UNA vez en el cupo del plan (como cuenta).
  */
-async function crearFichaAsistencia(conn, { empresaId, usuarioId, sedeId, nombre, documento, cargo }) {
-  if (!documento) {
-    throw badRequest('FALTA_DOCUMENTO', 'Para marcar asistencia hace falta el documento de la persona');
-  }
+async function crearFichaAsistencia(conn, { empresaId, usuarioId, sedeId, nombre, documento, cargo, telefono, email }) {
   if (!sedeId) {
-    throw badRequest('FALTA_SEDE', 'Para marcar asistencia la persona necesita una sede');
+    throw badRequest('FALTA_SEDE', 'El empleado necesita una sede');
   }
   const repetido = await txQueryOne(
     conn,
@@ -279,21 +301,33 @@ async function crearFichaAsistencia(conn, { empresaId, usuarioId, sedeId, nombre
     [empresaId, documento],
   );
   if (repetido && repetido.usuario_id && Number(repetido.usuario_id) !== Number(usuarioId)) {
-    throw conflict('DOCUMENTO_EN_USO', 'Ya hay otra persona con ese documento en Control de Personal');
+    throw conflict('DOCUMENTO_EN_USO', 'Ya hay otro empleado con ese documento');
   }
   if (repetido) {
-    // Ya marcaba asistencia sin cuenta: se liga (y deja de contar aparte).
-    await txExecute(conn, 'UPDATE asis_empleados SET usuario_id = ?, activo = 1 WHERE id = ?', [
-      usuarioId,
-      repetido.id,
-    ]);
+    // Ya estaba registrado (en Presente): se liga y completa sus datos.
+    await txExecute(
+      conn,
+      `UPDATE asis_empleados SET usuario_id = ?, activo = 1,
+              telefono = COALESCE(telefono, ?), email = COALESCE(email, ?)
+        WHERE id = ? AND empresa_id = ?`,
+      [usuarioId, telefono ?? null, email ?? null, repetido.id, empresaId],
+    );
     return;
   }
+  // Si el plan de Presente ya está lleno, el empleado se crea igual pero en
+  // pausa allá: Ventario no se bloquea por el cupo de la otra app.
+  const cupo = await txQueryOne(
+    conn,
+    `SELECT fn_limite_app(?, 'ASISTENCIA', 'personas') AS maximo,
+            fn_uso_app(?, 'ASISTENCIA', 'personas') AS usados`,
+    [empresaId, empresaId],
+  );
+  const enPausa = cupo?.maximo != null && Number(cupo.usados) >= Number(cupo.maximo) ? 1 : 0;
   await txExecute(
     conn,
-    `INSERT INTO asis_empleados (empresa_id, sede_id, usuario_id, documento, nombre, cargo)
-     VALUES (?,?,?,?,?,?)`,
-    [empresaId, sedeId, usuarioId, documento, nombre, cargo],
+    `INSERT INTO asis_empleados (empresa_id, sede_id, usuario_id, documento, nombre, cargo, telefono, email, en_pausa)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [empresaId, sedeId, usuarioId, documento, nombre, cargo, telefono ?? null, email ?? null, enPausa],
   );
 }
 
@@ -322,22 +356,39 @@ const revocarSesiones = (conn, usuarioId) =>
     [usuarioId],
   );
 
+/**
+ * Da acceso a Ventario a un empleado.
+ *
+ *   · Si ya existe (mismo documento, registrado en Presente) se usan sus datos.
+ *     Si ya tenía cuenta (de Presente), solo se le agrega el rol de Ventario:
+ *     entra con el mismo correo y contraseña.
+ *   · Si es nuevo, se crea su ficha de empleado (aparece en Presente; solo le
+ *     falta el rostro) y su cuenta, con contraseña al azar.
+ */
 export async function crear(datosCliente, gestor, ctx) {
-  const roles = rolesFinales(datosCliente.rol, datosCliente.rol_asistencia);
-  const datos = { ...datosCliente, rol: roles.rol, rol_asistencia: roles.rolAsistencia };
-  exigirRolAsignable(gestor, datos.rol, datos.rol_asistencia);
+  const roles = normalizarRoles(datosCliente.rol, null);
+  const datos = { ...datosCliente, rol: roles.rol };
+  exigirRolAsignable(gestor, datos.rol);
   const tramos = validarHorario(datos.restringir_horario, datos.horario, datos.rol);
   const empresaId = gestor.alcance.empresaId;
-  const uuid = datos.uuid ?? nuevoUuid();
-  const hash = await hashearPassword(datos.password);
+  const generada = !datos.password;
+  const hash = await hashearPassword(datos.password ?? passwordAleatoria());
 
-  return withTransaction(async (conn) => {
+  const resultado = await withTransaction(async (conn) => {
+    // La misma alta reenviada (la respuesta se perdió, doble toque): se
+    // devuelve la que ya existe en vez de fallar o crear otra.
+    if (datos.uuid) {
+      const ya = await txQueryOne(conn, 'SELECT uuid FROM usuarios WHERE uuid = ? AND empresa_id = ?', [
+        datos.uuid,
+        empresaId,
+      ]);
+      if (ya) return { uuid: ya.uuid, nueva: false, repetida: true };
+    }
+
     let sedeIds = await resolverSedes(conn, datos.sedes, gestor);
 
     // Sin sedes indicadas (la app vieja no las envía): el vendedor o auxiliar
     // va a la sede de quien lo crea, o a la principal si lo crea el director.
-    // Rechazarlo dejaría a los teléfonos sin actualizar sin poder dar de alta
-    // personal durante la transición.
     if (!sedeIds.length && ROLES_DE_UNA_SEDE.includes(datos.rol)) {
       if (esDirector(gestor.usuario.rol)) {
         const principal = await txQueryOne(
@@ -351,8 +402,52 @@ export async function crear(datosCliente, gestor, ctx) {
       }
     }
 
-    const error = validarSedesDeRol(datos.rol, sedeIds, datos.rol_asistencia);
+    const error = validarSedesDeRol(datos.rol, sedeIds);
     if (error) throw badRequest('SEDES_INVALIDAS', error);
+
+    // ¿El empleado ya existe? (registrado en Presente, con o sin cuenta)
+    const ficha = await txQueryOne(
+      conn,
+      `SELECT e.id, e.usuario_id, e.sede_id, u.uuid AS usuario_uuid, u.rol AS usuario_rol, u.rol_asistencia
+         FROM asis_empleados e
+         LEFT JOIN usuarios u ON u.id = e.usuario_id AND u.deleted_at IS NULL
+        WHERE e.empresa_id = ? AND e.documento = ?`,
+      [empresaId, datos.documento],
+    );
+    if (ficha?.usuario_uuid && ficha.usuario_rol) {
+      throw conflict('YA_TIENE_ACCESO', 'Ese empleado ya tiene acceso a Ventario');
+    }
+
+    if (ficha?.usuario_uuid) {
+      // Ya tenía cuenta de Presente: se le agrega Ventario, sin tocar su
+      // contraseña ni su rol de allá (salvo hacerlo director: lo es en las dos).
+      const r = normalizarRoles(datos.rol, ficha.rol_asistencia);
+      await txExecute(
+        conn,
+        `UPDATE usuarios SET rol = ?, rol_asistencia = ?, telefono = COALESCE(telefono, ?),
+                restringir_horario = ?, horario = ?
+          WHERE id = ?`,
+        [
+          r.rol,
+          r.rolAsistencia,
+          datos.telefono ?? null,
+          datos.restringir_horario ? 1 : 0,
+          tramos.length ? JSON.stringify(tramos) : null,
+          ficha.usuario_id,
+        ],
+      );
+      await fijarSedes(conn, Number(ficha.usuario_id), sedeIds);
+      await registrarAuditoria(conn, {
+        usuarioId: gestor.usuario.id,
+        sedeId: sedeIds[0] ?? null,
+        dispositivoUuid: ctx.dispositivoUuid,
+        accion: ACCIONES.ROL_CAMBIADO,
+        entidad: 'usuarios',
+        entidadUuid: ficha.usuario_uuid,
+        despues: { rol: r.rol, sedes: datos.sedes },
+      });
+      return { uuid: ficha.usuario_uuid, nueva: false };
+    }
 
     // El correo es la identidad para entrar a la plataforma: único en TODAS
     // las empresas, no solo en esta.
@@ -360,19 +455,12 @@ export async function crear(datosCliente, gestor, ctx) {
     const existe = await txQueryOne(conn, 'SELECT 1 x FROM usuarios WHERE email = ?', [datos.email]);
     if (existe) throw conflict('EMAIL_EN_USO', 'Ya hay una cuenta con ese correo');
 
-    // Si ya marcaba asistencia sin cuenta (mismo documento), la persona ya
-    // ocupaba su cupo: el trigger no la cuenta dos veces.
-    const fichaPrevia = datos.documento
-      ? await txQueryOne(
-          conn,
-          'SELECT id FROM asis_empleados WHERE empresa_id = ? AND documento = ? AND usuario_id IS NULL AND activo = 1',
-          [empresaId, datos.documento],
-        ).catch(() => null)
-      : null;
-    // La variable es de la CONEXIÓN, que vuelve al pool: se limpia pase lo
-    // que pase, o la siguiente alta en esa conexión heredaría la excepción.
+    const uuid = datos.uuid ?? nuevoUuid();
+    // Si el empleado ya existía sin cuenta, ya ocupaba su cupo en Presente: el
+    // trigger no lo cuenta dos veces. La variable es de la CONEXIÓN, que vuelve
+    // al pool: se limpia pase lo que pase.
     let r;
-    await txExecute(conn, 'SET @cupo_vincula_empleado = ?', [fichaPrevia?.id ?? null]);
+    await txExecute(conn, 'SET @cupo_vincula_empleado = ?', [ficha?.id ?? null]);
     try {
       r = await txExecute(
         conn,
@@ -383,11 +471,11 @@ export async function crear(datosCliente, gestor, ctx) {
           uuid,
           empresaId,
           datos.nombre,
-          datos.documento ?? null,
+          datos.documento,
           datos.email,
           hash,
-          datos.rol,
-          datos.rol_asistencia ?? null,
+          roles.rol,
+          roles.rolAsistencia,
           datos.telefono ?? null,
           datos.restringir_horario ? 1 : 0,
           tramos.length ? JSON.stringify(tramos) : null,
@@ -398,16 +486,26 @@ export async function crear(datosCliente, gestor, ctx) {
     }
     await fijarSedes(conn, r.insertId, sedeIds);
 
-    if (datos.marca_asistencia || fichaPrevia) {
-      await crearFichaAsistencia(conn, {
-        empresaId,
-        usuarioId: r.insertId,
-        sedeId: sedeIds[0] ?? gestor.alcance.sedeIds[0] ?? null,
-        nombre: datos.nombre,
-        documento: datos.documento,
-        cargo: datos.rol ? etiquetaRol(datos.rol) : null,
-      });
+    // El empleado es el mismo en Presente: allí solo le falta el rostro.
+    let sedeFicha = ficha?.sede_id ?? sedeIds[0] ?? null;
+    if (!sedeFicha) {
+      const principal = await txQueryOne(
+        conn,
+        'SELECT id FROM sedes WHERE empresa_id = ? AND es_principal = 1 AND deleted_at IS NULL ORDER BY id LIMIT 1',
+        [empresaId],
+      );
+      sedeFicha = principal ? Number(principal.id) : null;
     }
+    await crearFichaAsistencia(conn, {
+      empresaId,
+      usuarioId: r.insertId,
+      sedeId: sedeFicha,
+      nombre: datos.nombre,
+      documento: datos.documento,
+      cargo: etiquetaRol(datos.rol),
+      telefono: datos.telefono,
+      email: datos.email,
+    });
 
     await registrarAuditoria(conn, {
       usuarioId: gestor.usuario.id,
@@ -416,17 +514,20 @@ export async function crear(datosCliente, gestor, ctx) {
       accion: ACCIONES.USUARIO_CREADO,
       entidad: 'usuarios',
       entidadUuid: uuid,
-      despues: {
-        nombre: datos.nombre,
-        email: datos.email,
-        rol: datos.rol,
-        rol_asistencia: datos.rol_asistencia ?? null,
-        sedes: datos.sedes,
-      },
+      despues: { nombre: datos.nombre, email: datos.email, rol: roles.rol, sedes: datos.sedes },
     });
-
-    return publico(await cargarEmpleado(uuid, empresaId, conn));
+    return { uuid, nueva: true };
   });
+
+  const usuario = await cargarEmpleado(resultado.uuid, empresaId);
+  // Fuera de la transacción: un correo que tarda no bloquea la base.
+  const avisoEnviado = resultado.nueva && generada ? await avisarAcceso(usuario) : false;
+  return {
+    ...publico(usuario),
+    cuenta_existente: !resultado.nueva && !resultado.repetida,
+    ya_creada: !!resultado.repetida,
+    aviso_enviado: avisoEnviado,
+  };
 }
 
 /** Cargo con el que aparece en Control de Personal quien se crea desde aquí. */
@@ -454,7 +555,7 @@ export async function actualizar(uuid, datosCliente, gestor, ctx) {
     if (esElMismo && !esDirector(gestor.usuario.rol)) {
       // Un gerente puede editar sus datos básicos, no su rol, sedes, horario
       // ni habilitación: eso lo decide el director.
-      for (const campo of ['rol', 'rol_asistencia', 'sedes', 'activo', 'restringir_horario', 'horario']) {
+      for (const campo of ['rol', 'sedes', 'activo', 'restringir_horario', 'horario']) {
         if (datos[campo] !== undefined) {
           throw forbidden('Tu rol, sedes y horario los gestiona el Director General', 'SIN_PERMISO');
         }
@@ -464,29 +565,16 @@ export async function actualizar(uuid, datosCliente, gestor, ctx) {
       throw badRequest('AUTO_DESACTIVACION', 'No puedes desactivar tu propia cuenta');
     }
 
-    // Un rol por app, coherente: si el cliente cambió uno, el otro se deriva
-    // (p. ej. pasar a gerente lo hace gerente en las dos apps).
+    // Solo el rol de Ventario; el de Presente se conserva (salvo el director,
+    // que es administrador en las dos apps).
     let rol = antes.rol;
-    let rolAsistencia = antes.rol_asistencia;
-    if (datos.rol !== undefined || datos.rol_asistencia !== undefined) {
-      let pedido;
-      if (datos.rol !== undefined) {
-        // Rol de Ventario (o null + un rol solo de Presente).
-        pedido = rolesFinales(datos.rol, datos.rol === null ? (datos.rol_asistencia ?? null) : null);
-      } else if (datos.rol_asistencia === null) {
-        // Quitarle Presente: conserva su rol de Ventario si es de una sola app.
-        pedido = rolesFinales([ROLES.ADMIN, ROLES.GERENTE].includes(antes.rol) ? null : antes.rol, null);
-      } else {
-        pedido = rolesFinales(null, datos.rol_asistencia);
-      }
-      rol = pedido.rol;
-      rolAsistencia = pedido.rolAsistencia;
-      if (rol !== antes.rol || rolAsistencia !== antes.rol_asistencia) {
-        exigirRolAsignable(gestor, rol, rolAsistencia);
-        datos = { ...datos, rol, rol_asistencia: rolAsistencia };
-      } else {
-        datos = { ...datos, rol: undefined, rol_asistencia: undefined };
-      }
+    if (datos.rol !== undefined && datos.rol !== antes.rol) {
+      exigirRolAsignable(gestor, datos.rol);
+      const r = normalizarRoles(datos.rol, antes.rol_asistencia);
+      rol = r.rol;
+      datos = { ...datos, rol, rol_asistencia: r.rolAsistencia };
+    } else {
+      datos = { ...datos, rol: undefined };
     }
 
     // No dejar el negocio sin Director General activo.
@@ -535,7 +623,7 @@ export async function actualizar(uuid, datosCliente, gestor, ctx) {
     } else if (datos.rol === ROLES.ADMIN) {
       sedeIds = [];
     }
-    const errorSedes = validarSedesDeRol(rol, sedeIds, rolAsistencia);
+    const errorSedes = rol ? validarSedesDeRol(rol, sedeIds) : null;
     if (errorSedes) throw badRequest('SEDES_INVALIDAS', errorSedes);
 
     const cambianSedes =
@@ -552,6 +640,18 @@ export async function actualizar(uuid, datosCliente, gestor, ctx) {
 
     if (datos.activo === false || datos.password !== undefined) {
       await revocarSesiones(conn, antes.id);
+    }
+
+    // El empleado es el mismo en Presente: sus datos se mantienen iguales.
+    if (['nombre', 'documento', 'email', 'telefono'].some((c) => datos[c] !== undefined)) {
+      await txExecute(
+        conn,
+        `UPDATE asis_empleados e JOIN usuarios u ON u.id = e.usuario_id
+            SET e.nombre = u.nombre, e.documento = COALESCE(u.documento, e.documento),
+                e.email = u.email, e.telefono = u.telefono
+          WHERE e.usuario_id = ? AND e.empresa_id = ?`,
+        [antes.id, empresaId],
+      );
     }
 
     // ── Auditoría: una entrada por cada cosa sensible que cambió ──────────────
@@ -609,13 +709,20 @@ export async function eliminar(uuid, gestor, ctx) {
       throw conflict('ULTIMO_DIRECTOR', 'Debe quedar al menos un Director General activo');
     }
 
-    // Borrado lógico: las ventas y movimientos históricos deben seguir
-    // apuntando a quién los hizo.
-    await txExecute(
-      conn,
-      'UPDATE usuarios SET deleted_at = UTC_TIMESTAMP(3), activo = 0 WHERE id = ?',
-      [u.id],
-    );
+    if (u.rol_asistencia && u.rol !== ROLES.ADMIN) {
+      // También tiene cuenta de Presente: solo pierde el acceso a Ventario.
+      await txExecute(conn, 'UPDATE usuarios SET rol = NULL, pausa_inventario = 0 WHERE id = ?', [u.id]);
+    } else {
+      // Borrado lógico: las ventas y movimientos históricos deben seguir
+      // apuntando a quién los hizo. El empleado sigue existiendo en Presente,
+      // ahora sin cuenta.
+      await txExecute(
+        conn,
+        'UPDATE usuarios SET deleted_at = UTC_TIMESTAMP(3), activo = 0 WHERE id = ?',
+        [u.id],
+      );
+      await txExecute(conn, 'UPDATE asis_empleados SET usuario_id = NULL WHERE usuario_id = ?', [u.id]);
+    }
     await revocarSesiones(conn, u.id);
     await registrarAuditoria(conn, {
       usuarioId: gestor.usuario.id,
@@ -694,23 +801,51 @@ export async function revocarAccesoExtra(uuid, gestor, ctx) {
  * cuenta: al crear un vendedor se elige una y no se reescriben sus datos (el
  * documento la liga a la cuenta, y no ocupa un cupo nuevo).
  */
-export async function personasSinCuenta(sedeUuid, gestor) {
-  const sede = await queryOne(
-    'SELECT id FROM sedes WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL',
-    [sedeUuid, gestor.alcance.empresaId],
-  );
-  if (!sede) throw notFound('Sede');
-  if (!veSede(gestor.alcance, sede.id)) {
-    throw forbidden('No gestionas esa sede', 'SEDE_FUERA_DE_ALCANCE');
+/**
+ * Empleados (registrados en cualquiera de las dos apps) que aún NO tienen
+ * acceso a Ventario: para darles acceso sin volver a escribir sus datos.
+ * Incluye a quien ya tiene cuenta de Presente (se le agrega Ventario).
+ */
+export async function personasSinCuenta({ sede, q }, gestor) {
+  const empresaId = gestor.alcance.empresaId;
+  const where = ['e.empresa_id = ?', 'e.activo = 1', '(e.usuario_id IS NULL OR u.rol IS NULL)'];
+  const params = [empresaId];
+  if (sede) {
+    const s = await queryOne('SELECT id FROM sedes WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL', [
+      sede,
+      empresaId,
+    ]);
+    if (!s) throw notFound('Sede');
+    where.push('e.sede_id = ?');
+    params.push(s.id);
+  }
+  if (q) {
+    where.push('(e.nombre LIKE ? OR e.documento LIKE ?)');
+    params.push(`%${q}%`, `%${q}%`);
   }
   const filas = await query(
-    `SELECT documento, nombre, cargo
-       FROM asis_empleados
-      WHERE empresa_id = ? AND sede_id = ? AND activo = 1 AND usuario_id IS NULL
-      ORDER BY nombre`,
-    [gestor.alcance.empresaId, sede.id],
+    `SELECT e.documento, e.nombre, e.cargo, e.telefono, COALESCE(e.email, u.email) AS email,
+            e.sede_id, s.uuid AS sede_uuid, s.nombre AS sede_nombre, (u.id IS NOT NULL) AS con_cuenta
+       FROM asis_empleados e
+       JOIN sedes s ON s.id = e.sede_id
+       LEFT JOIN usuarios u ON u.id = e.usuario_id AND u.deleted_at IS NULL
+      WHERE ${where.join(' AND ')}
+      ORDER BY e.nombre
+      LIMIT 200`,
+    params,
   );
-  return filas.map((f) => ({ documento: f.documento, nombre: f.nombre, cargo: f.cargo ?? null }));
+  return filas
+    .filter((f) => veSede(gestor.alcance, Number(f.sede_id)))
+    .map((f) => ({
+      documento: f.documento,
+      nombre: f.nombre,
+      cargo: f.cargo ?? null,
+      telefono: f.telefono ?? null,
+      email: f.email ?? null,
+      sede: { uuid: f.sede_uuid, nombre: f.sede_nombre },
+      // Ya entra a Presente: con el mismo correo y contraseña entrará a Ventario.
+      con_cuenta: !!f.con_cuenta,
+    }));
 }
 
 /**
@@ -760,7 +895,7 @@ router.get(
 router.get(
   '/personas',
   validar({ query: personasQuery }),
-  asyncHandler(async (req, res) => ok(res, await personasSinCuenta(req.query.sede, gestorDe(req)))),
+  asyncHandler(async (req, res) => ok(res, await personasSinCuenta(req.query, gestorDe(req)))),
 );
 
 router.post(

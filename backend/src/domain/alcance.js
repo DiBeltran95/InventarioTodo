@@ -77,9 +77,7 @@ export function puedeAdministrar(gestor, objetivo) {
   if (esDirector(gestor.rol)) return true;
   if (gestor.rol !== ROLES.GERENTE) return false;
   if (esGestor(objetivo.rol) || ROLES_GESTORES.includes(objetivo.rol_asistencia)) return false;
-  // El operario (teléfonos de marcación) es de toda la empresa: lo gestiona
-  // también el gerente. Talento humano, solo el administrador.
-  if (objetivo.rol_asistencia === 'OPERARIO') return true;
+  // Talento humano de Presente lo gestiona solo el administrador.
   if (objetivo.rol_asistencia === 'TALENTO_HUMANO') return false;
   return objetivo.sedeIds.some((id) => gestor.alcance.sedeIds.includes(Number(id)));
 }
@@ -87,69 +85,35 @@ export function puedeAdministrar(gestor, objetivo) {
 /** Roles de la cuenta en Presente (Control de Personal). */
 export const ROLES_ASISTENCIA = Object.freeze(['ADMIN', 'GERENTE', 'TALENTO_HUMANO', 'OPERARIO']);
 
-/** Roles que existen solo en Presente. */
-export const ROLES_SOLO_ASISTENCIA = Object.freeze(['TALENTO_HUMANO', 'OPERARIO']);
 
 /**
- * Roles por app (la base lo exige con ck_usuarios_roles):
- *   · ADMIN y GERENTE son el MISMO rol en las dos apps.
- *   · AUXILIAR_INVENTARIO y VENDEDOR son solo de Ventario.
- *   · TALENTO_HUMANO y OPERARIO son solo de Presente.
- * Recibe lo que pidió el cliente y devuelve la pareja coherente, o un error.
+ * Roles por app (migración 007): el empleado es uno solo, pero la cuenta tiene
+ * un rol en cada app por separado. Desde Ventario solo se decide el rol de
+ * Ventario; el de Presente se conserva. La única regla común: el
+ * administrador (dueño de la empresa) lo es en las dos apps (la base lo exige
+ * con ck_usuarios_roles), así que hacerlo director lo hace administrador de
+ * Presente y quitárselo le quita también ese rol allá.
  */
-export function normalizarRoles(rol, rolAsistencia) {
-  if (rol === ROLES.ADMIN || rol === ROLES.GERENTE) {
-    if (rolAsistencia != null && rolAsistencia !== rol) {
-      return { error: 'Administrador y gerente tienen el mismo rol en las dos apps' };
-    }
-    return { rol, rolAsistencia: rol };
-  }
-  if (rol != null) {
-    if (rolAsistencia != null) {
-      return { error: 'Auxiliar de inventario y vendedor son roles solo de Ventario' };
-    }
-    return { rol, rolAsistencia: null };
-  }
-  if (rolAsistencia === ROLES.ADMIN || rolAsistencia === ROLES.GERENTE) {
-    return { rol: rolAsistencia, rolAsistencia };
-  }
-  if (rolAsistencia == null || ROLES_SOLO_ASISTENCIA.includes(rolAsistencia)) {
-    return { rol: null, rolAsistencia: rolAsistencia ?? null };
-  }
-  return { error: 'Rol no válido' };
+export function normalizarRoles(rol, rolAsistenciaActual = null) {
+  if (rol === ROLES.ADMIN) return { rol, rolAsistencia: 'ADMIN' };
+  return { rol, rolAsistencia: rolAsistenciaActual === 'ADMIN' ? null : (rolAsistenciaActual ?? null) };
 }
 
 /**
- * Valida la combinación de roles (uno por app) + sedes de una cuenta.
- * Devuelve un mensaje de error o null.
- *
- *   · Sin rol en ninguna app no hay cuenta que valga: para alguien que solo
- *     marca asistencia está el empleado de Control de Personal, sin cuenta.
- *   · ADMIN es el dueño de la empresa en las dos apps: si lo es en una, en la
- *     otra es ADMIN o no entra (un ADMIN que en la otra fuera gerente tendría
- *     sedes en una y ninguna en la otra).
- *   · Las sedes son las mismas en las dos apps: el GERENTE lo es de las mismas.
- *   · TALENTO_HUMANO y OPERARIO (solo Presente) son de todas las sedes.
+ * Valida el rol de Ventario con sus sedes. Devuelve un mensaje de error o null.
+ *   · El director ve todas las sedes: no se le asignan.
+ *   · Vendedor y auxiliar trabajan en exactamente una sede.
+ *   · El gerente gestiona una o varias.
  */
-export function validarSedesDeRol(rol, sedeIds, rolAsistencia = null) {
-  if (!rol && !rolAsistencia) {
-    return 'Elige un rol para la cuenta';
-  }
-  // Talento humano y operario trabajan en todas las sedes de Presente.
-  if (!rol && ROLES_SOLO_ASISTENCIA.includes(rolAsistencia)) {
-    return sedeIds.length ? 'Talento humano y operario trabajan en todas las sedes: no se les asignan sedes' : null;
-  }
-  const esAdmin = rol === ROLES.ADMIN || rolAsistencia === 'ADMIN';
-  if (esAdmin && ((rol && rol !== ROLES.ADMIN) || (rolAsistencia && rolAsistencia !== 'ADMIN'))) {
-    return 'El administrador de la empresa lo es en las dos apps';
-  }
-  if (esAdmin) {
-    return sedeIds.length ? 'El administrador ve todas las sedes: no se le asignan sedes' : null;
+export function validarSedesDeRol(rol, sedeIds) {
+  if (!rol) return 'Elige un rol de Ventario para la cuenta';
+  if (rol === ROLES.ADMIN) {
+    return sedeIds.length ? 'El director ve todas las sedes: no se le asignan sedes' : null;
   }
   if (rol === ROLES.VENDEDOR || rol === ROLES.AUXILIAR_INVENTARIO) {
     return sedeIds.length === 1 ? null : 'Vendedores y auxiliares pertenecen a exactamente una sede';
   }
-  if (rol === ROLES.GERENTE || rolAsistencia === 'GERENTE') {
+  if (rol === ROLES.GERENTE) {
     return sedeIds.length ? null : 'Un gerente necesita al menos una sede';
   }
   return null;

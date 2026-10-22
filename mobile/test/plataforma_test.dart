@@ -91,26 +91,24 @@ void main() {
       expect(PlanEmpresa.desdeJson(_planGratis)!.aplicativo, 'INVENTARIO');
     });
 
-    test('el rol único decide a qué app entra la cuenta', () {
-      expect(RolCuenta.director.enLasDos, isTrue);
-      expect(RolCuenta.gerente.asistencia, 'GERENTE');
-      expect(RolCuenta.vendedor.asistencia, isNull);
-      expect(RolCuenta.vendedor.unaSede, isTrue);
-      expect(RolCuenta.talentoHumano.inventario, isNull);
-      expect(RolCuenta.operario.conSedes, isFalse);
-      expect(RolCuenta.asignablesPorGerente, isNot(contains(RolCuenta.gerente)));
-      expect(RolCuenta.de(inventario: RolUsuario.auxiliarInventario), RolCuenta.auxiliar);
-      expect(RolCuenta.de(asistencia: 'OPERADOR'), RolCuenta.operario);
-      expect(RolCuenta.de(), isNull);
+    test('un empleado registrado se elige sin reescribir sus datos', () {
+      final e = EmpleadoRegistrado.desdeJson({
+        'documento': '1055', 'nombre': 'Luz Rojas', 'cargo': 'Cajera', 'telefono': '300', 'email': 'luz@ej.co',
+        'sede': {'uuid': 'u-1', 'nombre': 'Centro'}, 'con_cuenta': 1,
+      });
+      expect(e.nombre, 'Luz Rojas');
+      expect(e.sedeUuid, 'u-1');
+      expect(e.sedeNombre, 'Centro');
+      expect(e.conCuenta, isTrue, reason: 'ya entra a Presente: usa la misma cuenta');
     });
 
-    test('una cuenta solo de Presente y en pausa se reconoce', () {
+    test('la cuenta trae sus pausas por app', () {
       final u = UsuarioAdmin.desdeJson({
-        'uuid': 'x', 'nombre': 'Luz', 'email': 'luz@ej.co', 'rol': null, 'rol_asistencia': 'TALENTO_HUMANO',
+        'uuid': 'x', 'nombre': 'Luz', 'email': 'luz@ej.co', 'rol': 'VENDEDOR', 'rol_asistencia': 'GERENTE',
         'activo': true, 'pausa_asistencia': 1, 'pausa_inventario': false,
       });
-      expect(u.conAccesoInventario, isFalse);
-      expect(u.rolCuenta, RolCuenta.talentoHumano);
+      expect(u.rol, RolUsuario.vendedor);
+      expect(u.rolAsistencia, 'GERENTE', reason: 'roles independientes por app');
       expect(u.pausaAsistencia, isTrue);
       expect(u.pausaInventario, isFalse);
     });

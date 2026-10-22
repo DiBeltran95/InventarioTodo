@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/config/app_config.dart';
 import '../../../core/database/app_database.dart';
@@ -128,7 +129,7 @@ class UsuariosPage extends ConsumerWidget {
     for (final u in lista.where((u) => u.rol.esDirector)) {
       grupos.putIfAbsent(null, () => []).add(u);
     }
-    final conSede = lista.where((u) => !u.rol.esDirector && !(u.rolCuenta?.soloPresente ?? false)).toList();
+    final conSede = lista.where((u) => !u.rol.esDirector).toList();
     final nombres = {for (final u in conSede) ...u.sedes.map((s) => s.nombre)}.toList()..sort();
     for (final n in nombres) {
       grupos[n] = conSede.where((u) => u.sedes.any((s) => s.nombre == n)).toList()
@@ -140,9 +141,6 @@ class UsuariosPage extends ConsumerWidget {
     }
     final sinSede = conSede.where((u) => u.sedes.isEmpty).toList();
     if (sinSede.isNotEmpty) grupos['Sin sede asignada'] = sinSede;
-    // Talento humano y operarios: de todas las sedes, solo en Presente.
-    final presente = lista.where((u) => !u.rol.esDirector && (u.rolCuenta?.soloPresente ?? false)).toList();
-    if (presente.isNotEmpty) grupos['Solo Presente'] = presente;
     return grupos;
   }
 
@@ -168,8 +166,8 @@ Future<void> abrirFormularioEmpleado(BuildContext context, WidgetRef ref, {Usuar
   if (guardado == true) ref.invalidate(usuariosProvider);
 }
 
-/// El rol único de la cuenta (decide a qué app entra).
-String _etiquetaRol(UsuarioAdmin u) => u.rolCuenta?.etiqueta ?? 'Sin rol';
+/// Su rol en Ventario.
+String _etiquetaRol(UsuarioAdmin u) => u.rol.etiqueta;
 
 /// Lista de cuentas. Es un `FutureProvider` y no un stream de Drift porque
 /// estos datos viven en el servidor, no en la base local.
@@ -326,15 +324,6 @@ class _FilaUsuario extends StatelessWidget {
                     color: context.dominio.advertencia,
                     fondo: context.dominio.advertenciaContenedor,
                     icono: Icons.pause_circle_outline_rounded,
-                  ),
-                if (usuario.rolAsistencia != null)
-                  _Etiqueta(
-                    texto: usuario.pausaAsistencia ? 'Presente · en pausa' : 'Presente',
-                    color: usuario.pausaAsistencia ? context.dominio.advertencia : context.colores.onSurfaceVariant,
-                    fondo: usuario.pausaAsistencia
-                        ? context.dominio.advertenciaContenedor
-                        : context.colores.surfaceContainerHighest,
-                    icono: Icons.face_retouching_natural_outlined,
                   ),
                 if (estado != null) _Etiqueta(texto: estado.texto, color: estado.color, fondo: estado.fondo, icono: estado.icono),
               ],
@@ -653,14 +642,6 @@ class _HojaEmpleadoState extends ConsumerState<_HojaEmpleado> {
                 subtitle: const Text('Cuando el plan no alcanza para todos'),
                 onTap: () => _pausar('INVENTARIO', !u.pausaInventario),
               ),
-            if (!propio && soyDirector && u.activo && u.rolAsistencia != null && u.rolAsistencia != 'ADMIN')
-              ListTile(
-                enabled: !_enviando,
-                leading: Icon(u.pausaAsistencia ? Icons.play_circle_outline_rounded : Icons.pause_circle_outline_rounded),
-                title: Text(u.pausaAsistencia ? 'Reactivar en Presente' : 'Pausar en Presente'),
-                subtitle: const Text('En Ventario sigue igual'),
-                onTap: () => _pausar('ASISTENCIA', !u.pausaAsistencia),
-              ),
             if (!propio) ...[
               ListTile(
                 enabled: !_enviando,
@@ -723,6 +704,13 @@ class _FormularioUsuario extends ConsumerStatefulWidget {
   ConsumerState<_FormularioUsuario> createState() => _FormularioUsuarioState();
 }
 
+/// Alta o edición del acceso a Ventario de un empleado.
+///
+/// El empleado es uno solo para las dos apps: lo normal es ELEGIRLO de los ya
+/// registrados (en Presente o aquí) y solo darle su rol de Ventario. Si es
+/// nuevo, se escriben sus datos una vez y aparecerá también en Presente (allá
+/// solo falta registrar su rostro). La contraseña no se escribe: se genera al
+/// azar y la persona crea la suya con «¿Olvidaste tu contraseña?».
 class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
   final _formulario = GlobalKey<FormState>();
   late final _nombre = TextEditingController(text: widget.usuario?.nombre ?? '');
@@ -730,74 +718,77 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
   late final _telefono = TextEditingController(text: widget.usuario?.telefono ?? '');
   late final _documento = TextEditingController(text: widget.usuario?.documento ?? '');
   final _password = TextEditingController();
+  final _buscar = TextEditingController();
 
-  /// Un solo rol: decide a qué app entra (ver [RolCuenta]).
-  late RolCuenta? _rol = widget.usuario == null ? RolCuenta.vendedor : widget.usuario!.rolCuenta;
+  late RolUsuario _rol = widget.usuario?.rol ?? RolUsuario.vendedor;
   late Set<String> _sedes = {...?widget.usuario?.sedes.map((s) => s.uuid)};
-  bool _marcaAsistencia = false;
   bool _ocultar = true;
   bool _guardando = false;
 
-  /// Documento de la persona de Presente elegida: la cuenta se une a su ficha
-  /// (no ocupa otro cupo ni se reescriben sus datos).
-  String? _personaLigada;
+  /// Alta: elegir un empleado ya registrado (true) o registrar uno nuevo.
+  bool _registrado = true;
+  EmpleadoRegistrado? _elegido;
+  late Future<List<EmpleadoRegistrado>> _candidatos = _cargarCandidatos();
 
   bool get _esEdicion => widget.usuario != null;
 
-  void _elegirRol(RolCuenta r) => setState(() {
-        _rol = r;
-        if (!r.conSedes) _sedes = {};
-        // Pasar de gerente a vendedor deja varias sedes: se conserva la primera.
-        if (r.unaSede && _sedes.length > 1) _sedes = {_sedes.first};
-      });
+  /// Identidad de ESTA alta: si la respuesta se pierde y se reintenta, el
+  /// servidor reconoce que ya la creó en vez de crear otra.
+  final String _uuidAlta = const Uuid().v4();
 
-  Future<void> _elegirPersona(Sede sede) async {
-    final persona = await showModalBottomSheet<({String documento, String nombre, String? cargo})>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => _HojaPersonas(sede: sede),
-    );
-    if (persona == null || !mounted) return;
-    setState(() {
-      _nombre.text = persona.nombre;
-      _documento.text = persona.documento;
-      _personaLigada = persona.documento;
-      _marcaAsistencia = false;
-    });
-  }
+  /// Ya entra a Presente: usa su misma cuenta, no se le pide correo.
+  bool get _usaCuentaExistente => !_esEdicion && (_elegido?.conCuenta ?? false);
+
+  Future<List<EmpleadoRegistrado>> _cargarCandidatos() =>
+      ref.read(authRepositoryProvider).empleadosSinAcceso(q: _buscar.text.trim());
 
   @override
   void dispose() {
-    _nombre.dispose();
-    _email.dispose();
-    _telefono.dispose();
-    _documento.dispose();
-    _password.dispose();
+    for (final c in [_nombre, _email, _telefono, _documento, _password, _buscar]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
-  Future<void> _guardar(bool hayAsistencia) async {
-    if (!(_formulario.currentState?.validate() ?? false)) return;
-    final rol = _rol;
-    if (rol == null) {
-      mostrarMensaje(context, 'Elige un rol para la cuenta', esError: true);
+  void _elegirRol(RolUsuario r) => setState(() {
+        _rol = r;
+        if (r.esDirector) _sedes = {};
+        // Pasar de gerente a vendedor deja varias sedes: se conserva la primera.
+        if (r.esDeUnaSede && _sedes.length > 1) _sedes = {_sedes.first};
+      });
+
+  void _elegir(EmpleadoRegistrado e, List<Sede> misSedes) => setState(() {
+        _elegido = e;
+        _nombre.text = e.nombre;
+        _documento.text = e.documento;
+        _telefono.text = e.telefono ?? '';
+        _email.text = e.email ?? '';
+        // Su sede de siempre, si la gestiono.
+        if (!_rol.esDirector && misSedes.any((s) => s.uuid == e.sedeUuid)) _sedes = {e.sedeUuid};
+      });
+
+  Future<void> _guardar() async {
+    // Un segundo toque mientras guarda no envía otra alta.
+    if (_guardando) return;
+    if (!_esEdicion && _registrado && _elegido == null) {
+      mostrarMensaje(context, 'Elige el empleado al que le das acceso', esError: true);
       return;
     }
-    if (rol.unaSede && _sedes.length != 1) {
+    if (!(_formulario.currentState?.validate() ?? false)) return;
+    if (_rol.esDeUnaSede && _sedes.length != 1) {
       mostrarMensaje(context, 'Elige la sede donde trabaja', esError: true);
       return;
     }
-    if (rol == RolCuenta.gerente && _sedes.isEmpty) {
+    if (_rol == RolUsuario.gerente && _sedes.isEmpty) {
       mostrarMensaje(context, 'Elige al menos una sede para el gerente', esError: true);
       return;
     }
     setState(() => _guardando = true);
 
-    final sedes = rol.conSedes ? _sedes.toList() : <String>[];
-    final documento = _documento.text.trim();
+    final sedes = _rol.esDirector ? <String>[] : _sedes.toList();
     try {
       final repo = ref.read(authRepositoryProvider);
+      var mensaje = 'Cambios guardados';
       if (_esEdicion) {
         final antes = widget.usuario!;
         final cambiaronSedes = ({...antes.sedes.map((s) => s.uuid)}.length != sedes.length) ||
@@ -807,38 +798,40 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
         // El gerente que se edita a sí mismo no puede tocar su rol ni sus
         // sedes (el servidor lo rechazaría): esos campos no viajan.
         final puedeTocarRol = !propio || soyDirector;
-        final cambiaRol = puedeTocarRol && rol != antes.rolCuenta;
+        final cambiaRol = puedeTocarRol && _rol != antes.rol;
+        String? cambio(TextEditingController c, String? antes) => c.text.trim() == (antes ?? '') ? null : c.text.trim();
         await repo.actualizarUsuario(
           antes.uuid,
-          nombre: _nombre.text.trim(),
-          email: _email.text.trim(),
-          // El rol viaja completo (uno por app) para que el servidor no
-          // conserve un rol de la otra app que ya no corresponde.
-          rol: cambiaRol ? rol.inventario : null,
-          quitarAccesoInventario: cambiaRol && rol.inventario == null,
-          cambiarRolAsistencia: cambiaRol,
-          rolAsistencia: rol.asistencia,
+          nombre: cambio(_nombre, antes.nombre),
+          email: cambio(_email, antes.email),
+          documento: cambio(_documento, antes.documento),
+          telefono: cambio(_telefono, antes.telefono),
+          rol: cambiaRol ? _rol : null,
           sedes: puedeTocarRol && (cambiaronSedes || cambiaRol) ? sedes : null,
           password: _password.text.isEmpty ? null : _password.text,
         );
       } else {
-        await repo.crearUsuario(
+        final r = await repo.crearUsuario(
+          uuid: _uuidAlta,
           nombre: _nombre.text.trim(),
-          email: _email.text.trim(),
-          password: _password.text,
-          rol: rol.inventario,
-          rolAsistencia: rol.asistencia,
-          documento: documento.isEmpty ? null : documento,
-          // Ligada a una persona de Presente, su ficha ya existe.
-          marcaAsistencia: hayAsistencia && _marcaAsistencia && _personaLigada == null,
+          email: _email.text.trim().toLowerCase(),
+          documento: _documento.text.trim(),
           telefono: _telefono.text.trim(),
+          rol: _rol,
           sedes: sedes,
         );
+        mensaje = r.cuentaExistente
+            ? '${_nombre.text.trim()} ya entra a Ventario con su misma cuenta'
+            : r.avisoEnviado
+                ? 'Listo: le enviamos un correo para que cree su contraseña'
+                : 'Acceso creado: que entre con «¿Olvidaste tu contraseña?» para crear la suya';
       }
       ref.read(syncEngineProvider).solicitar();
       // El cupo de personas cambió: que los medidores lo reflejen.
       ref.invalidate(empresaProvider);
-      if (mounted) Navigator.pop(context, true);
+      if (!mounted) return;
+      mostrarMensaje(context, mensaje, esExito: true);
+      Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _guardando = false);
@@ -854,25 +847,12 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
     final soyDirector = sesion?.rol.esDirector ?? false;
     final propio = widget.usuario?.uuid == sesion?.usuarioUuid;
     final misSedes = ref.watch(misSedesProvider).value ?? const <Sede>[];
-    // Sin saber aún si la empresa usa Presente, la sección no se
-    // muestra: mejor ocultarla un instante que ofrecer algo que no existe.
-    final hayAsistencia = ref.watch(empresaProvider).value?.tieneAsistencia ?? false;
-    // El gerente sólo da de alta vendedores, auxiliares y operarios: crear
-    // gerentes sería repartir privilegios que no le corresponden.
-    final rolesPosibles = [
-      for (final r in soyDirector ? RolCuenta.values : RolCuenta.asignablesPorGerente)
-        if (hayAsistencia || !r.soloPresente) r,
-    ];
-    final puedeTocarRol = (!propio || soyDirector) && (_rol == null || rolesPosibles.contains(_rol));
-    final sedeUnica = _rol?.unaSede ?? false;
-    final grupos = [
-      ('En las dos apps', Icons.apps_rounded, [RolCuenta.director, RolCuenta.gerente]),
-      ('Solo Ventario', Icons.inventory_2_outlined, [RolCuenta.vendedor, RolCuenta.auxiliar]),
-      ('Solo Presente', Icons.face_retouching_natural_outlined, [RolCuenta.talentoHumano, RolCuenta.operario]),
-    ];
-    final sedeParaPersona = sedeUnica && _sedes.length == 1
-        ? misSedes.where((s) => s.uuid == _sedes.first).firstOrNull
-        : null;
+    // El gerente sólo da acceso de vendedor o auxiliar: crear gerentes sería
+    // repartir privilegios que no le corresponden.
+    final rolesPosibles = soyDirector ? RolUsuario.values : const [RolUsuario.vendedor, RolUsuario.auxiliarInventario];
+    final puedeTocarRol = (!propio || soyDirector) && rolesPosibles.contains(_rol);
+    final sedeUnica = _rol.esDeUnaSede;
+    final muestraDatos = _esEdicion || !_registrado || _elegido != null;
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -885,32 +865,114 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                EncabezadoHoja(titulo: _esEdicion ? 'Editar empleado' : 'Nuevo empleado'),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _nombre,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(labelText: 'Nombre *', prefixIcon: Icon(Icons.person_outline_rounded)),
-                  validator: (v) => (v?.trim().length ?? 0) < 2 ? 'Escribe el nombre completo' : null,
-                ),
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: _email,
-                  keyboardType: TextInputType.emailAddress,
-                  autocorrect: false,
-                  decoration: const InputDecoration(
-                    labelText: 'Correo *',
-                    helperText: 'Con él entra a todas las apps de la empresa',
-                    prefixIcon: Icon(Icons.alternate_email_rounded),
-                  ),
-                  validator: (v) {
-                    final texto = v?.trim() ?? '';
-                    if (texto.isEmpty) return 'El correo es obligatorio';
-                    if (!texto.contains('@') || !texto.contains('.')) return 'Correo no válido';
-                    return null;
-                  },
+                EncabezadoHoja(
+                  titulo: _esEdicion ? 'Editar empleado' : 'Dar acceso a Ventario',
+                  subtitulo: _esEdicion ? null : 'Elige un empleado ya registrado o registra uno nuevo',
                 ),
                 if (!_esEdicion) ...[
+                  const SizedBox(height: 16),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(value: true, icon: Icon(Icons.badge_outlined), label: Text('Ya registrado')),
+                      ButtonSegment(value: false, icon: Icon(Icons.person_add_alt_1_outlined), label: Text('Nuevo')),
+                    ],
+                    selected: {_registrado},
+                    onSelectionChanged: (v) => setState(() {
+                      _registrado = v.first;
+                      _elegido = null;
+                      for (final c in [_nombre, _email, _telefono, _documento]) {
+                        c.clear();
+                      }
+                    }),
+                  ),
+                ],
+                if (!_esEdicion && _registrado && _elegido == null) ...[
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _buscar,
+                    decoration: const InputDecoration(
+                      hintText: 'Buscar por nombre o documento',
+                      prefixIcon: Icon(Icons.search_rounded),
+                      isDense: true,
+                    ),
+                    onChanged: (_) => setState(() => _candidatos = _cargarCandidatos()),
+                  ),
+                  const SizedBox(height: 8),
+                  FutureBuilder<List<EmpleadoRegistrado>>(
+                    future: _candidatos,
+                    builder: (context, snap) {
+                      if (snap.hasError) {
+                        return Text(_textoError(snap.error!), style: TextStyle(color: context.dominio.peligro));
+                      }
+                      final lista = snap.data;
+                      if (lista == null) {
+                        return const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()));
+                      }
+                      if (lista.isEmpty) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Text(
+                            'No hay empleados registrados sin acceso a Ventario. Usa «Nuevo» para registrarlo.',
+                            style: context.textos.bodyMedium?.copyWith(color: context.colores.onSurfaceVariant),
+                          ),
+                        );
+                      }
+                      return Column(
+                        children: [
+                          for (final e in lista.take(30))
+                            Card(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              child: ListTile(
+                                leading: const Icon(Icons.person_outline_rounded),
+                                title: Text(e.nombre),
+                                subtitle: Text([e.documento, e.sedeNombre].join(' · ')),
+                                trailing: const Icon(Icons.chevron_right_rounded),
+                                onTap: () => _elegir(e, misSedes),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+                if (_elegido != null) ...[
+                  const SizedBox(height: 16),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.badge_outlined),
+                      title: Text(_elegido!.nombre),
+                      subtitle: Text([_elegido!.documento, _elegido!.sedeNombre].join(' · ')),
+                      trailing: TextButton(onPressed: () => setState(() => _elegido = null), child: const Text('Cambiar')),
+                    ),
+                  ),
+                  if (_usaCuentaExistente)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Ya entra a Presente: usará el mismo correo y contraseña.',
+                        style: context.textos.bodySmall?.copyWith(color: context.dominio.exito),
+                      ),
+                    ),
+                ],
+                if (muestraDatos && _elegido == null) ...[
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _nombre,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(labelText: 'Nombre *', prefixIcon: Icon(Icons.person_outline_rounded)),
+                    validator: (v) => (v?.trim().length ?? 0) < 2 ? 'Escribe el nombre completo' : null,
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _documento,
+                    decoration: const InputDecoration(
+                      labelText: 'Documento *',
+                      helperText: 'Cédula u otro documento: lo identifica en las dos apps',
+                      prefixIcon: Icon(Icons.badge_outlined),
+                    ),
+                    validator: (v) =>
+                        RegExp(r'^[A-Za-z0-9.-]{3,20}$').hasMatch(v?.trim() ?? '') ? null : 'De 3 a 20 letras o números',
+                  ),
                   const SizedBox(height: 14),
                   TextFormField(
                     controller: _telefono,
@@ -918,67 +980,75 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
                     decoration: const InputDecoration(labelText: 'Teléfono', prefixIcon: Icon(Icons.phone_outlined)),
                   ),
                 ],
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: _password,
-                  obscureText: _ocultar,
-                  decoration: InputDecoration(
-                    labelText: _esEdicion ? 'Nueva contraseña' : 'Contraseña *',
-                    helperText: _esEdicion
-                        ? 'Déjala vacía para no cambiarla. Cambiarla cierra sus sesiones.'
-                        : 'Mínimo 8 caracteres',
-                    prefixIcon: const Icon(Icons.lock_outline_rounded),
-                    suffixIcon: IconButton(
-                      tooltip: _ocultar ? 'Mostrar contraseña' : 'Ocultar contraseña',
-                      onPressed: () => setState(() => _ocultar = !_ocultar),
-                      icon: Icon(_ocultar ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                if (muestraDatos && !_usaCuentaExistente) ...[
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _email,
+                    keyboardType: TextInputType.emailAddress,
+                    autocorrect: false,
+                    decoration: InputDecoration(
+                      labelText: 'Correo *',
+                      helperText: _esEdicion
+                          ? 'Con él entra a las apps de la empresa'
+                          : 'Con él entra. Le llegará un aviso para crear su contraseña.',
+                      helperMaxLines: 2,
+                      prefixIcon: const Icon(Icons.alternate_email_rounded),
                     ),
+                    validator: (v) {
+                      final texto = v?.trim() ?? '';
+                      if (texto.isEmpty) return 'El correo es obligatorio';
+                      if (!texto.contains('@') || !texto.contains('.')) return 'Correo no válido';
+                      return null;
+                    },
                   ),
-                  validator: (v) {
-                    final texto = v ?? '';
-                    if (_esEdicion && texto.isEmpty) return null;
-                    return texto.length < 8 ? 'Mínimo 8 caracteres' : null;
-                  },
-                ),
-                if (puedeTocarRol) ...[
-                  RadioGroup<RolCuenta>(
+                ],
+                if (_esEdicion) ...[
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _password,
+                    obscureText: _ocultar,
+                    decoration: InputDecoration(
+                      labelText: 'Nueva contraseña',
+                      helperText: 'Déjala vacía para no cambiarla. Cambiarla cierra sus sesiones.',
+                      prefixIcon: const Icon(Icons.lock_outline_rounded),
+                      suffixIcon: IconButton(
+                        tooltip: _ocultar ? 'Mostrar contraseña' : 'Ocultar contraseña',
+                        onPressed: () => setState(() => _ocultar = !_ocultar),
+                        icon: Icon(_ocultar ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                      ),
+                    ),
+                    validator: (v) {
+                      final texto = v ?? '';
+                      return texto.isEmpty || texto.length >= 8 ? null : 'Mínimo 8 caracteres';
+                    },
+                  ),
+                ],
+                if (puedeTocarRol && muestraDatos) ...[
+                  const SizedBox(height: 20),
+                  Text('Rol en Ventario', style: context.textos.titleSmall),
+                  const SizedBox(height: 4),
+                  RadioGroup<RolUsuario>(
                     groupValue: _rol,
                     onChanged: (r) {
                       if (r != null) _elegirRol(r);
                     },
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        for (final (titulo, icono, roles) in grupos)
-                          if (roles.any(rolesPosibles.contains)) ...[
-                            const SizedBox(height: 16),
-                            _TituloApp(icono: icono, titulo: titulo),
-                            for (final r in roles)
-                              if (rolesPosibles.contains(r))
-                                RadioListTile<RolCuenta>(
-                                  value: r,
-                                  contentPadding: EdgeInsets.zero,
-                                  dense: true,
-                                  title: Text(r.etiqueta),
-                                  subtitle: Text(r.descripcion),
-                                ),
-                          ],
+                        for (final r in rolesPosibles)
+                          RadioListTile<RolUsuario>(
+                            value: r,
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            title: Text(r.etiqueta),
+                            subtitle: Text(_descripcionRol(r)),
+                          ),
                       ],
                     ),
                   ),
-                  if (_rol != null && !_rol!.conSedes) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      _rol == RolCuenta.director
-                          ? 'El director ve todas las sedes.'
-                          : 'Trabaja en todas las sedes de Presente: no se le asignan sedes.',
-                      style: context.textos.bodySmall?.copyWith(color: context.colores.onSurfaceVariant),
-                    ),
-                  ],
-                  if (_rol?.conSedes ?? false) ...[
+                  if (!_rol.esDirector) ...[
                     const SizedBox(height: 16),
                     Text(
-                      _rol == RolCuenta.gerente ? 'Sedes que gestiona' : 'Sede donde trabaja',
+                      _rol == RolUsuario.gerente ? 'Sedes que gestiona' : 'Sede donde trabaja',
                       style: context.textos.titleSmall,
                     ),
                     const SizedBox(height: 8),
@@ -1001,47 +1071,10 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
                               ChoiceChip(
                                 label: Text(s.nombre),
                                 selected: _sedes.contains(s.uuid),
-                                onSelected: (_) => setState(() {
-                                  _sedes = {s.uuid};
-                                  // La persona elegida era de otra sede.
-                                  if (_personaLigada != null) _personaLigada = null;
-                                }),
+                                onSelected: (_) => setState(() => _sedes = {s.uuid}),
                               ),
                         ],
                       ),
-                    if (!_esEdicion && hayAsistencia && sedeParaPersona != null) ...[
-                      const SizedBox(height: 12),
-                      if (_personaLigada == null)
-                        OutlinedButton.icon(
-                          onPressed: () => _elegirPersona(sedeParaPersona),
-                          icon: const Icon(Icons.badge_outlined),
-                          label: Text('Elegir persona registrada en ${sedeParaPersona.nombre}'),
-                        )
-                      else
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: context.dominio.exitoContenedor,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(Icons.link_rounded, color: context.dominio.exito, size: 20),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  'Se une a su ficha de Presente: no ocupa otro cupo ni se repiten sus datos.',
-                                  style: context.textos.bodySmall?.copyWith(color: context.dominio.exito),
-                                ),
-                              ),
-                              TextButton(
-                                onPressed: () => setState(() => _personaLigada = null),
-                                child: const Text('Quitar'),
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
                     if (_esEdicion && _sedes.isNotEmpty && widget.usuario!.sedes.isNotEmpty &&
                         !_sedes.contains(widget.usuario!.sedes.first.uuid) && sedeUnica)
                       Padding(
@@ -1054,42 +1087,17 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
                       ),
                   ],
                 ],
-                if (hayAsistencia) ...[
-                  if (!_esEdicion && _personaLigada == null && !(_rol?.soloPresente ?? false)) ...[
-                    const SizedBox(height: 12),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: _marcaAsistencia,
-                      onChanged: (v) => setState(() => _marcaAsistencia = v),
-                      title: const Text('Marca asistencia con el rostro'),
-                      subtitle: const Text('Queda en Presente; el registro facial se hace en esa app.'),
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  TextFormField(
-                    controller: _documento,
-                    keyboardType: TextInputType.text,
-                    decoration: InputDecoration(
-                      labelText: _marcaAsistencia ? 'Documento *' : 'Documento',
-                      helperText: 'Cédula u otro documento. Con él se identifica en el kiosco.',
-                      prefixIcon: const Icon(Icons.badge_outlined),
-                    ),
-                    validator: (v) {
-                      final texto = v?.trim() ?? '';
-                      if (texto.isEmpty) return _marcaAsistencia ? 'Para marcar asistencia hace falta el documento' : null;
-                      return RegExp(r'^[A-Za-z0-9.-]{3,20}$').hasMatch(texto) ? null : 'De 3 a 20 letras o números';
-                    },
+                if (muestraDatos) ...[
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    onPressed: _guardando ? null : _guardar,
+                    icon: _guardando
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.2))
+                        : const Icon(Icons.check_rounded),
+                    label: Text(_esEdicion ? 'Guardar cambios' : 'Dar acceso'),
+                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(54)),
                   ),
                 ],
-                const SizedBox(height: 20),
-                FilledButton.icon(
-                  onPressed: _guardando ? null : () => _guardar(hayAsistencia),
-                  icon: _guardando
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.2))
-                      : const Icon(Icons.check_rounded),
-                  label: Text(_esEdicion ? 'Guardar cambios' : 'Crear empleado'),
-                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(54)),
-                ),
               ],
             ),
           ),
@@ -1098,71 +1106,12 @@ class _FormularioUsuarioState extends ConsumerState<_FormularioUsuario> {
     );
   }
 
-}
-
-/// Personas que ya marcan asistencia en la sede y no tienen cuenta.
-class _HojaPersonas extends ConsumerWidget {
-  const _HojaPersonas({required this.sede});
-  final Sede sede;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return SafeArea(
-      child: FutureBuilder(
-        future: ref.read(authRepositoryProvider).personasSinCuenta(sede.uuid),
-        builder: (context, snap) {
-          final lista = snap.data;
-          return ListView(
-            shrinkWrap: true,
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-            children: [
-              EncabezadoHoja(
-                titulo: 'Personas de ${sede.nombre}',
-                subtitulo: 'Registradas en Presente y aún sin cuenta',
-              ),
-              const SizedBox(height: 12),
-              if (snap.hasError)
-                Text(_textoError(snap.error!), style: context.textos.bodyMedium?.copyWith(color: context.dominio.peligro))
-              else if (lista == null)
-                const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()))
-              else if (lista.isEmpty)
-                Text(
-                  'No hay personas sin cuenta en esta sede. Escribe sus datos a mano.',
-                  style: context.textos.bodyMedium?.copyWith(color: context.colores.onSurfaceVariant),
-                )
-              else
-                for (final p in lista)
-                  Card(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    child: ListTile(
-                      leading: const Icon(Icons.person_outline_rounded),
-                      title: Text(p.nombre),
-                      subtitle: Text([p.documento, ?p.cargo].join(' · ')),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () => Navigator.pop(context, p),
-                    ),
-                  ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _TituloApp extends StatelessWidget {
-  const _TituloApp({required this.icono, required this.titulo});
-  final IconData icono;
-  final String titulo;
-
-  @override
-  Widget build(BuildContext context) => Row(
-        children: [
-          Icon(icono, size: 18, color: context.colores.primary),
-          const SizedBox(width: 8),
-          Text(titulo, style: context.textos.titleSmall),
-        ],
-      );
+  static String _descripcionRol(RolUsuario r) => switch (r) {
+        RolUsuario.director => 'Ve y gestiona todas las sedes, el personal y los costos. También administra Presente.',
+        RolUsuario.gerente => 'Gestiona catálogo, stock y personal de sus sedes; aprueba traslados y ajustes.',
+        RolUsuario.auxiliarInventario => 'Registra entradas; sus conteos y mermas los aprueba el gerente. No vende.',
+        RolUsuario.vendedor => 'Vende y consulta. No ve costos ni edita el catálogo.',
+      };
 }
 
 // ─── Horario ────────────────────────────────────────────────────────────────
