@@ -154,14 +154,27 @@ export function perfilPublico(u) {
  * `exigirAccesoInventario` revisa (cuenta, empresa, app y rol).
  */
 const SELECT_USUARIO = `
-  SELECT u.id, u.uuid, u.empresa_id, u.nombre, u.email, u.password_hash, u.rol, u.rol_asistencia,
-         u.activo, u.pausa_inventario, u.restringir_horario, u.horario, u.acceso_extra_hasta,
+  SELECT u.id, u.uuid, u.empresa_id, u.nombre, u.email, c.password_hash, u.rol, u.rol_asistencia,
+         (u.activo = 1 AND COALESCE(u.empleado_activo, 1) = 1) AS activo, u.pausa_inventario,
+         u.restringir_horario, u.horario, u.acceso_extra_hasta,
          e.uuid AS empresa_uuid, e.nombre AS empresa_nombre,
          e.estado AS empresa_estado, e.deleted_at AS empresa_borrada,
          ea.activo AS app_habilitada
-    FROM usuarios u
+    FROM v_usuarios u
+    JOIN usuarios c ON c.id = u.id
     LEFT JOIN empresas e ON e.id = u.empresa_id
     LEFT JOIN empresa_aplicativos ea ON ea.empresa_id = u.empresa_id AND ea.aplicativo = 'INVENTARIO'`;
+
+/**
+ * Ids de la cuenta que entra con ese correo (2 parámetros: el mismo correo).
+ * El correo es el del EMPLEADO; solo las cuentas técnicas (Operario,
+ * superadministrador) tienen uno propio. Dos búsquedas por índice.
+ */
+// aislamiento: el correo es la identidad global para entrar a la plataforma
+export const SQL_CUENTA_POR_CORREO = `
+  SELECT id FROM usuarios WHERE email = ?
+  UNION ALL
+  SELECT x.id FROM usuarios x JOIN empleados em ON em.id = x.empleado_id WHERE em.email = ?`;
 
 /** Empresa tal como la ve la app (sin ids internos). */
 const empresaPublica = (u) => ({ uuid: u.empresa_uuid, nombre: u.empresa_nombre });
@@ -200,8 +213,8 @@ async function resolverSedeActiva(alcance, sedeUuid, conn = null) {
 
 export async function login({ email, password, dispositivo, sede_uuid: sedeUuid }, userAgent) {
   const usuario = await queryOne(
-    `${SELECT_USUARIO} WHERE u.email = ? AND u.deleted_at IS NULL AND u.es_superadmin = 0`,
-    [email],
+    `${SELECT_USUARIO} WHERE u.id IN (${SQL_CUENTA_POR_CORREO}) AND u.deleted_at IS NULL AND u.es_superadmin = 0`,
+    [email, email],
   );
 
   // Se verifica siempre contra un hash (real o señuelo) para que el tiempo de
@@ -331,12 +344,13 @@ export async function refrescar({ refresh_token: recibido, dispositivo }, userAg
       const fila = await txQueryOne(
         conn,
         `SELECT rt.id, rt.usuario_id, rt.familia, rt.expires_at, rt.revoked_at,
-                u.uuid, u.empresa_id, u.nombre, u.email, u.rol, u.rol_asistencia, u.activo,
+                u.uuid, u.empresa_id, u.nombre, u.email, u.rol, u.rol_asistencia,
+                (u.activo = 1 AND COALESCE(u.empleado_activo, 1) = 1) AS activo,
                 u.pausa_inventario, u.restringir_horario, u.horario, u.acceso_extra_hasta,
                 e.estado AS empresa_estado, e.deleted_at AS empresa_borrada,
                 ea.activo AS app_habilitada
            FROM refresh_tokens rt
-           JOIN usuarios u ON u.id = rt.usuario_id
+           JOIN v_usuarios u ON u.id = rt.usuario_id
            LEFT JOIN empresas e ON e.id = u.empresa_id
            LEFT JOIN empresa_aplicativos ea ON ea.empresa_id = u.empresa_id AND ea.aplicativo = 'INVENTARIO'
           WHERE rt.token_hash = ?

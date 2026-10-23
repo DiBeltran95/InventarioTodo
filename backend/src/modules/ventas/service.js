@@ -561,7 +561,7 @@ export async function listarVentas(filtros, alcance) {
       `SELECT ${SELECT_VENTA},
               (SELECT COUNT(*) FROM venta_detalles d WHERE d.venta_id = v.id) AS num_lineas
          FROM ventas v
-         LEFT JOIN usuarios u ON u.id = v.usuario_id
+         LEFT JOIN v_usuarios u ON u.id = v.usuario_id
          LEFT JOIN ventas vo ON vo.id = v.anula_a_venta_id
          ${sqlWhere}
         ORDER BY v.fecha DESC, v.id DESC
@@ -569,7 +569,7 @@ export async function listarVentas(filtros, alcance) {
       [...params, filtros.limite, offset],
     ),
     query(
-      `SELECT COUNT(*) total FROM ventas v LEFT JOIN usuarios u ON u.id = v.usuario_id ${sqlWhere}`,
+      `SELECT COUNT(*) total FROM ventas v LEFT JOIN v_usuarios u ON u.id = v.usuario_id ${sqlWhere}`,
       params,
     ),
   ]);
@@ -581,7 +581,7 @@ export async function obtenerVenta(uuid, alcance) {
   const venta = await queryOne(
     `SELECT ${SELECT_VENTA}, v.id AS _id
        FROM ventas v
-       LEFT JOIN usuarios u ON u.id = v.usuario_id
+       LEFT JOIN v_usuarios u ON u.id = v.usuario_id
        LEFT JOIN ventas vo ON vo.id = v.anula_a_venta_id
       WHERE v.uuid = ? AND v.sede_id IN (?) AND v.deleted_at IS NULL`,
     [uuid, alcance.sedeIds.length ? alcance.sedeIds : [0]],
@@ -603,7 +603,7 @@ async function obtenerVentaTx(conn, uuid, empresaId) {
     `SELECT ${SELECT_VENTA}, v.id AS _id
        FROM ventas v
        JOIN sedes sv ON sv.id = v.sede_id
-       LEFT JOIN usuarios u ON u.id = v.usuario_id
+       LEFT JOIN v_usuarios u ON u.id = v.usuario_id
        LEFT JOIN ventas vo ON vo.id = v.anula_a_venta_id
       WHERE v.uuid = ? AND sv.empresa_id = ?`,
     [uuid, empresaId],

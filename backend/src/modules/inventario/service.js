@@ -359,7 +359,7 @@ export async function listarMovimientos(filtros, alcance) {
               v.uuid AS venta_uuid, v.numero AS venta_numero
          FROM movimientos_inventario m
          JOIN productos p ON p.id = m.producto_id
-         LEFT JOIN usuarios u ON u.id = m.usuario_id
+         LEFT JOIN v_usuarios u ON u.id = m.usuario_id
          LEFT JOIN proveedores pr ON pr.id = m.proveedor_id
          LEFT JOIN ventas v ON v.id = m.venta_id
          ${sqlWhere}

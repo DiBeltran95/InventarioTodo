@@ -28,6 +28,7 @@ import { nuevoUuid, sha256 } from '../../utils/ids.js';
 import { ROLES } from '../../config/constants.js';
 import { enviarCorreo } from '../../utils/correo.js';
 import { registrarAuditoria, ACCIONES } from '../../utils/auditoria.js';
+import { SQL_CUENTA_POR_CORREO } from '../auth/service.js';
 import { hashearPassword, verificarPassword, login } from '../auth/service.js';
 import { passwordSchema, dispositivoSchema } from '../auth/schemas.js';
 import { traducirErrorSql } from '../../middleware/errorHandler.js';
@@ -166,8 +167,10 @@ const hashCodigo = (usuarioId, codigo) => sha256(`${usuarioId}:${codigo}`);
 async function recuperar({ email }) {
   // aislamiento: el correo es la identidad global para entrar a la plataforma
   const u = await queryOne(
-    'SELECT id, nombre FROM usuarios WHERE email = ? AND activo = 1 AND deleted_at IS NULL',
-    [email],
+    `SELECT id, nombre FROM v_usuarios
+      WHERE id IN (${SQL_CUENTA_POR_CORREO}) AND activo = 1 AND deleted_at IS NULL
+        AND COALESCE(empleado_activo, 1) = 1`,
+    [email, email],
   );
   if (u) {
     const codigo = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
@@ -194,8 +197,8 @@ async function restablecer({ email, codigo, password }) {
     badRequest('CODIGO_INVALIDO', 'El código no es válido o ya venció. Pide uno nuevo.');
   // aislamiento: el correo es la identidad global para entrar a la plataforma
   const u = await queryOne(
-    'SELECT id FROM usuarios WHERE email = ? AND activo = 1 AND deleted_at IS NULL',
-    [email],
+    `SELECT id FROM usuarios WHERE id IN (${SQL_CUENTA_POR_CORREO}) AND activo = 1 AND deleted_at IS NULL`,
+    [email, email],
   );
   if (!u) throw invalido();
 

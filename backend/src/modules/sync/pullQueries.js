@@ -85,13 +85,13 @@ export const CONSULTAS = {
              -- sin red. No se omite la fila: una que deja de bajar nunca le
              -- avisaría al teléfono que ya no tiene acceso.
              COALESCE(u.rol, 'VENDEDOR') AS rol, u.rol_asistencia,
-             (u.activo = 1 AND u.rol IS NOT NULL) AS activo,
+             (u.activo = 1 AND u.rol IS NOT NULL AND COALESCE(u.empleado_activo, 1) = 1) AS activo,
              u.restringir_horario, u.horario, u.acceso_extra_hasta,
              (SELECT GROUP_CONCAT(s.uuid ORDER BY s.uuid)
                 FROM usuario_sedes us2 JOIN sedes s ON s.id = us2.sede_id
                WHERE us2.usuario_id = u.id) AS sedes,
              u.updated_at, u.deleted_at
-        FROM usuarios u
+        FROM v_usuarios u
        WHERE ${KEYSET('u')} AND u.empresa_id = ?
          AND (? OR u.id = ? OR u.rol = 'ADMIN'
               OR EXISTS (SELECT 1 FROM usuario_sedes us
@@ -194,7 +194,7 @@ export const CONSULTAS = {
              v.fecha, v.fecha_local, v.creada_offline,
              v.updated_at, v.deleted_at
         FROM ventas v
-        LEFT JOIN usuarios u ON u.id = v.usuario_id
+        LEFT JOIN v_usuarios u ON u.id = v.usuario_id
         LEFT JOIN ventas vo ON vo.id = v.anula_a_venta_id
         LEFT JOIN sedes s ON s.id = v.sede_id
        WHERE ${KEYSET('v')} AND v.fecha_local >= ? AND ${SEDE('v.sede_id')}
@@ -246,8 +246,8 @@ export const CONSULTAS = {
         LEFT JOIN ventas v ON v.id = m.venta_id
         LEFT JOIN traslados t ON t.id = m.traslado_id
         LEFT JOIN proveedores pr ON pr.id = m.proveedor_id
-        LEFT JOIN usuarios u ON u.id = m.usuario_id
-        LEFT JOIN usuarios ap ON ap.id = m.aprobado_por
+        LEFT JOIN v_usuarios u ON u.id = m.usuario_id
+        LEFT JOIN v_usuarios ap ON ap.id = m.aprobado_por
        WHERE ${KEYSET('m')} AND m.fecha_local >= ? AND ${SEDE('m.sede_id')}
        ORDER BY m.updated_at, m.id LIMIT ?`,
   },
@@ -280,8 +280,8 @@ export const CONSULTAS = {
         FROM traslados t
         JOIN sedes so ON so.id = t.sede_origen_id
         JOIN sedes sd ON sd.id = t.sede_destino_id
-        LEFT JOIN usuarios us ON us.id = t.solicitado_por
-        LEFT JOIN usuarios ur ON ur.id = t.resuelto_por
+        LEFT JOIN v_usuarios us ON us.id = t.solicitado_por
+        LEFT JOIN v_usuarios ur ON ur.id = t.resuelto_por
        WHERE ${KEYSET('t')} AND (${SEDE('t.sede_origen_id')} OR ${SEDE('t.sede_destino_id')})
        ORDER BY t.updated_at, t.id LIMIT ?`,
   },
@@ -307,7 +307,7 @@ export const CONSULTAS = {
              u.uuid AS usuario_uuid, e.fecha, e.nota, e.updated_at
         FROM traslado_eventos e
         JOIN traslados t ON t.id = e.traslado_id
-        LEFT JOIN usuarios u ON u.id = e.usuario_id
+        LEFT JOIN v_usuarios u ON u.id = e.usuario_id
        WHERE ${KEYSET('e')} AND (${SEDE('t.sede_origen_id')} OR ${SEDE('t.sede_destino_id')})
        ORDER BY e.updated_at, e.id LIMIT ?`,
   },
@@ -324,8 +324,8 @@ export const CONSULTAS = {
         FROM solicitudes_ajuste sa
         JOIN sedes s ON s.id = sa.sede_id
         JOIN productos p ON p.id = sa.producto_id
-        LEFT JOIN usuarios us ON us.id = sa.solicitado_por
-        LEFT JOIN usuarios ur ON ur.id = sa.resuelto_por
+        LEFT JOIN v_usuarios us ON us.id = sa.solicitado_por
+        LEFT JOIN v_usuarios ur ON ur.id = sa.resuelto_por
         LEFT JOIN movimientos_inventario m ON m.id = sa.movimiento_id
        WHERE ${KEYSET('sa')} AND ${SEDE('sa.sede_id')}
        ORDER BY sa.updated_at, sa.id LIMIT ?`,
@@ -343,8 +343,8 @@ export const CONSULTAS = {
              ur.uuid AS revisado_por_uuid, c.revisado_en, c.updated_at
         FROM cierres_caja c
         JOIN sedes s ON s.id = c.sede_id
-        LEFT JOIN usuarios u ON u.id = c.usuario_id
-        LEFT JOIN usuarios ur ON ur.id = c.revisado_por
+        LEFT JOIN v_usuarios u ON u.id = c.usuario_id
+        LEFT JOIN v_usuarios ur ON ur.id = c.revisado_por
        WHERE ${KEYSET('c')} AND DATE(c.abierto_en) >= ? AND ${SEDE('c.sede_id')}
          AND (? OR c.usuario_id = ?)
        ORDER BY c.updated_at, c.id LIMIT ?`,
@@ -367,7 +367,7 @@ export const CONSULTAS = {
         FROM recaudos r
         JOIN metodos_pago mp ON mp.id = r.metodo_pago_id
         LEFT JOIN sedes s ON s.id = r.sede_id
-        LEFT JOIN usuarios u ON u.id = r.registrado_por
+        LEFT JOIN v_usuarios u ON u.id = r.registrado_por
        WHERE ${KEYSET('r')} AND ? AND mp.empresa_id = ?
          AND (r.sede_id IN (?) OR (r.sede_id IS NULL AND ?))
        ORDER BY r.updated_at, r.id LIMIT ?`,

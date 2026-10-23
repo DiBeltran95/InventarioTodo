@@ -130,7 +130,7 @@ export async function ventasPorEmpleado({ desde, hasta }, ambito) {
                 AND a.anula_a_venta_id IS NULL
                 AND a.deleted_at IS NULL
                 AND a.fecha_local BETWEEN ? AND ? AND ${fa.sql}) AS anuladas
-       FROM usuarios u
+       FROM v_usuarios u
        LEFT JOIN ventas v
               ON v.usuario_id = u.id
              AND v.estado = 'COMPLETADA'

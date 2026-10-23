@@ -41,7 +41,8 @@ const TABLAS_DE_EMPRESA = [
   'recaudos',
   'alertas',
   'movimientos_inventario',
-  'asis_empleados',
+  'empleados',
+  'v_usuarios',
 ];
 const TABLA = new RegExp(`\\b(FROM|JOIN|UPDATE|INTO)\\s+(${TABLAS_DE_EMPRESA.join('|')})\\b`, 'i');
 const BUSQUEDA_GLOBAL = /\b(uuid|codigo|sku|email|documento)\s*(=|IN\b|LIKE)/i;

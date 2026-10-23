@@ -87,7 +87,7 @@ async function listar(f, alcance) {
             u.uuid AS usuario_uuid, u.nombre AS usuario_nombre, u.rol AS usuario_rol,
             s.uuid AS sede_uuid, s.nombre AS sede_nombre
        FROM auditoria a
-       LEFT JOIN usuarios u ON u.id = a.usuario_id
+       LEFT JOIN v_usuarios u ON u.id = a.usuario_id
        LEFT JOIN sedes s ON s.id = a.sede_id
       WHERE ${condiciones.join(' AND ')}
       ORDER BY a.id DESC

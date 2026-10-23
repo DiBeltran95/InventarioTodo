@@ -30,7 +30,7 @@ function errorDeRegla(err) {
     });
   }
   if (mensaje === 'EMAIL_EN_USO') {
-    return new ApiError(409, 'EMAIL_EN_USO', 'Ya hay una cuenta con ese correo');
+    return new ApiError(409, 'EMAIL_EN_USO', 'Ese correo ya lo usa otra persona');
   }
   return new ApiError(409, 'REGLA_NEGOCIO', mensaje || 'Operación no permitida');
 }
@@ -48,7 +48,8 @@ export function traducirErrorSql(err) {
         uk_prodcod_empresa_codigo: `El código "${valor}" ya está asignado a otro producto`,
         uk_sedes_empresa_codigo: `Ya hay una sede con el código "${valor}"`,
         uk_usuarios_email: `Ya existe un usuario con el correo "${valor}"`,
-        uk_usuarios_empresa_documento: `Ya hay una persona con el documento "${valor}"`,
+        uk_empleados_email: `Ya hay una persona con el correo "${valor}"`,
+        uk_asis_emp_empresa_documento: `Ya hay un empleado con el documento "${valor}"`,
         uk_ventas_numero: `Ya existe una venta con el número "${valor}"`,
         uk_dispositivos_prefijo: 'Ese prefijo de folio ya está en uso',
       };

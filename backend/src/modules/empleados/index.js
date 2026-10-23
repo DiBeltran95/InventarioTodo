@@ -12,14 +12,20 @@
  * autenticación rechaza su siguiente petición. La app, al recibir
  * CUENTA_DESACTIVADA, cierra la sesión en el teléfono.
  *
- * Plataforma multiempresa: el EMPLEADO es uno solo para las dos apps (su
- * ficha en asis_empleados: documento, nombre, teléfono, correo, sede). Aquí se
- * le da una cuenta de acceso a Ventario (`rol`); su rol en Presente
- * (`rol_asistencia`) lo decide Presente y no se toca, salvo el director, que
- * es administrador en las dos. Todo empleado creado aquí aparece en Presente
- * (solo le falta el rostro). La contraseña se genera al azar y la persona crea
- * la suya con «¿Olvidaste tu contraseña?». Todo se acota a la empresa del
- * gestor, y el cupo de personas del plan lo exige la base (LIMITE_PLAN → 409).
+ * Plataforma multiempresa: la PERSONA vive una sola vez, en `empleados`
+ * (documento, nombre, correo, teléfono, cargo, sede), para las dos apps. La
+ * cuenta (`usuarios`) solo guarda a qué empleado pertenece (`empleado_id`),
+ * la contraseña, los roles, las pausas y el horario; se lee con la vista
+ * `v_usuarios`, que une las dos. Aquí se le da acceso a Ventario (`rol`); su
+ * rol en Presente (`rol_asistencia`) lo decide Presente y no se toca, salvo
+ * el director, que es administrador en las dos. Todo empleado creado aquí
+ * aparece en Presente (solo le falta el rostro). La contraseña se genera al
+ * azar y la persona crea la suya con «¿Olvidaste tu contraseña?», escribiendo
+ * el correo DEL EMPLEADO. Todo se acota a la empresa del gestor, y el cupo de
+ * personas del plan lo exige la base (LIMITE_PLAN → 409).
+ *
+ * Ojo: un UPDATE de `empleados` no puede cruzarse (JOIN o subconsulta) con
+ * `usuarios`: su trigger marca la cuenta como modificada.
  */
 import crypto from 'node:crypto';
 import { Router } from 'express';
@@ -112,13 +118,14 @@ const personasQuery = z.object({
 
 // ── Lectura ─────────────────────────────────────────────────────────────────
 
-/** Usuario con sus sedes. `conn` opcional (dentro de transacción). */
+/** Cuenta + sus datos de empleado + sus sedes. `conn` opcional (dentro de transacción). */
 async function cargarEmpleado(uuid, empresaId, conn = null) {
   const leer = (sql, p) => (conn ? txQueryOne(conn, sql, p) : queryOne(sql, p));
   const u = await leer(
-    `SELECT id, uuid, nombre, documento, email, rol, rol_asistencia, activo, pausa_inventario, pausa_asistencia,
-            telefono, restringir_horario, horario, acceso_extra_hasta, ultimo_acceso, created_at, updated_at
-       FROM usuarios WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL`,
+    `SELECT id, uuid, empleado_id, nombre, documento, email, rol, rol_asistencia, activo, pausa_inventario,
+            pausa_asistencia, telefono, restringir_horario, horario, acceso_extra_hasta, ultimo_acceso,
+            created_at, updated_at
+       FROM v_usuarios WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL`,
     [uuid, empresaId],
   );
   if (!u) throw notFound('Usuario');
@@ -171,7 +178,7 @@ export async function listar(gestor) {
             u.pausa_inventario, u.pausa_asistencia, u.telefono, u.restringir_horario,
             u.horario, u.acceso_extra_hasta, u.ultimo_acceso, u.created_at, u.updated_at,
             GROUP_CONCAT(CONCAT(s.id, '|', s.uuid, '|', s.nombre) ORDER BY s.nombre SEPARATOR '\\n') AS sedes_txt
-       FROM usuarios u
+       FROM v_usuarios u
        LEFT JOIN usuario_sedes us ON us.usuario_id = u.id
        LEFT JOIN sedes s ON s.id = us.sede_id AND s.deleted_at IS NULL
       WHERE u.deleted_at IS NULL AND u.empresa_id = ? AND (u.rol IS NOT NULL OR u.id = ?)
@@ -287,35 +294,14 @@ async function contarDirectoresActivos(conn, empresaId) {
 }
 
 /**
- * Ficha de Control de Personal ligada a la cuenta (la persona marca asistencia
- * con el rostro). Va sin fotos: el registro facial se hace en esa app. Ligada,
- * la persona cuenta UNA vez en el cupo del plan (como cuenta).
+ * El empleado nuevo (la persona). Es el mismo en Presente, donde solo le falta
+ * el rostro. Si el plan de Presente ya está lleno se crea igual pero en pausa
+ * allá: Ventario no se bloquea por el cupo de la otra app.
  */
-async function crearFichaAsistencia(conn, { empresaId, usuarioId, sedeId, nombre, documento, cargo, telefono, email }) {
+async function crearEmpleado(conn, { empresaId, sedeId, nombre, documento, cargo, telefono, email }) {
   if (!sedeId) {
     throw badRequest('FALTA_SEDE', 'El empleado necesita una sede');
   }
-  const repetido = await txQueryOne(
-    conn,
-    'SELECT id, usuario_id FROM asis_empleados WHERE empresa_id = ? AND documento = ?',
-    [empresaId, documento],
-  );
-  if (repetido && repetido.usuario_id && Number(repetido.usuario_id) !== Number(usuarioId)) {
-    throw conflict('DOCUMENTO_EN_USO', 'Ya hay otro empleado con ese documento');
-  }
-  if (repetido) {
-    // Ya estaba registrado (en Presente): se liga y completa sus datos.
-    await txExecute(
-      conn,
-      `UPDATE asis_empleados SET usuario_id = ?, activo = 1,
-              telefono = COALESCE(telefono, ?), email = COALESCE(email, ?)
-        WHERE id = ? AND empresa_id = ?`,
-      [usuarioId, telefono ?? null, email ?? null, repetido.id, empresaId],
-    );
-    return;
-  }
-  // Si el plan de Presente ya está lleno, el empleado se crea igual pero en
-  // pausa allá: Ventario no se bloquea por el cupo de la otra app.
   const cupo = await txQueryOne(
     conn,
     `SELECT fn_limite_app(?, 'ASISTENCIA', 'personas') AS maximo,
@@ -323,12 +309,29 @@ async function crearFichaAsistencia(conn, { empresaId, usuarioId, sedeId, nombre
     [empresaId, empresaId],
   );
   const enPausa = cupo?.maximo != null && Number(cupo.usados) >= Number(cupo.maximo) ? 1 : 0;
-  await txExecute(
+  const r = await txExecute(
     conn,
-    `INSERT INTO asis_empleados (empresa_id, sede_id, usuario_id, documento, nombre, cargo, telefono, email, en_pausa)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
-    [empresaId, sedeId, usuarioId, documento, nombre, cargo, telefono ?? null, email ?? null, enPausa],
+    `INSERT INTO empleados (empresa_id, sede_id, documento, nombre, cargo, telefono, email, en_pausa)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [empresaId, sedeId, documento, nombre, cargo, telefono ?? null, email, enPausa],
   );
+  return Number(r.insertId);
+}
+
+/**
+ * El correo es con lo que se entra a la plataforma: no puede tenerlo otra
+ * persona (de esta u otra empresa) ni una cuenta técnica. La base lo exige
+ * igual (uk_empleados_email, EMAIL_EN_USO); aquí se explica mejor.
+ */
+async function exigirCorreoLibre(conn, email, empleadoId = null) {
+  // aislamiento: el correo es único en toda la plataforma, no por empresa
+  const otro = await txQueryOne(
+    conn,
+    `SELECT 1 x FROM empleados WHERE email = ? AND id <> COALESCE(?, 0)
+     UNION ALL SELECT 1 FROM usuarios WHERE email = ? LIMIT 1`,
+    [email, empleadoId, email],
+  );
+  if (otro) throw conflict('EMAIL_EN_USO', 'Ese correo ya lo usa otra persona');
 }
 
 async function cajaAbierta(conn, usuarioId) {
@@ -405,37 +408,44 @@ export async function crear(datosCliente, gestor, ctx) {
     const error = validarSedesDeRol(datos.rol, sedeIds);
     if (error) throw badRequest('SEDES_INVALIDAS', error);
 
-    // ¿El empleado ya existe? (registrado en Presente, con o sin cuenta)
+    // ¿El empleado ya existe? (registrado en Presente, con o sin cuenta; la
+    // cuenta puede estar dada de baja).
     const ficha = await txQueryOne(
       conn,
-      `SELECT e.id, e.usuario_id, e.sede_id, u.uuid AS usuario_uuid, u.rol AS usuario_rol, u.rol_asistencia
-         FROM asis_empleados e
-         LEFT JOIN usuarios u ON u.id = e.usuario_id AND u.deleted_at IS NULL
+      `SELECT e.id, e.sede_id, e.email, e.activo, u.id AS usuario_id, u.uuid AS usuario_uuid,
+              u.rol AS usuario_rol, u.rol_asistencia, u.deleted_at AS cuenta_borrada
+         FROM empleados e
+         LEFT JOIN usuarios u ON u.empleado_id = e.id
         WHERE e.empresa_id = ? AND e.documento = ?`,
       [empresaId, datos.documento],
     );
-    if (ficha?.usuario_uuid && ficha.usuario_rol) {
+    const cuentaViva = ficha?.usuario_id && !ficha.cuenta_borrada;
+    if (cuentaViva && ficha.usuario_rol) {
       throw conflict('YA_TIENE_ACCESO', 'Ese empleado ya tiene acceso a Ventario');
     }
 
-    if (ficha?.usuario_uuid) {
+    if (cuentaViva) {
       // Ya tenía cuenta de Presente: se le agrega Ventario, sin tocar su
       // contraseña ni su rol de allá (salvo hacerlo director: lo es en las dos).
       const r = normalizarRoles(datos.rol, ficha.rol_asistencia);
       await txExecute(
         conn,
-        `UPDATE usuarios SET rol = ?, rol_asistencia = ?, telefono = COALESCE(telefono, ?),
-                restringir_horario = ?, horario = ?
-          WHERE id = ?`,
+        'UPDATE usuarios SET rol = ?, rol_asistencia = ?, restringir_horario = ?, horario = ? WHERE id = ?',
         [
           r.rol,
           r.rolAsistencia,
-          datos.telefono ?? null,
           datos.restringir_horario ? 1 : 0,
           tramos.length ? JSON.stringify(tramos) : null,
           ficha.usuario_id,
         ],
       );
+      if (datos.telefono) {
+        await txExecute(conn, 'UPDATE empleados SET telefono = COALESCE(telefono, ?) WHERE id = ? AND empresa_id = ?', [
+          datos.telefono,
+          ficha.id,
+          empresaId,
+        ]);
+      }
       await fijarSedes(conn, Number(ficha.usuario_id), sedeIds);
       await registrarAuditoria(conn, {
         usuarioId: gestor.usuario.id,
@@ -449,63 +459,67 @@ export async function crear(datosCliente, gestor, ctx) {
       return { uuid: ficha.usuario_uuid, nueva: false };
     }
 
-    // El correo es la identidad para entrar a la plataforma: único en TODAS
-    // las empresas, no solo en esta.
-    // aislamiento: el correo es único en toda la plataforma, no por empresa
-    const existe = await txQueryOne(conn, 'SELECT 1 x FROM usuarios WHERE email = ?', [datos.email]);
-    if (existe) throw conflict('EMAIL_EN_USO', 'Ya hay una cuenta con ese correo');
-
-    const uuid = datos.uuid ?? nuevoUuid();
-    // Si el empleado ya existía sin cuenta, ya ocupaba su cupo en Presente: el
-    // trigger no lo cuenta dos veces. La variable es de la CONEXIÓN, que vuelve
-    // al pool: se limpia pase lo que pase.
-    let r;
-    await txExecute(conn, 'SET @cupo_vincula_empleado = ?', [ficha?.id ?? null]);
-    try {
-      r = await txExecute(
+    // La persona: si ya existía se usan SUS datos (solo se completa lo que le
+    // falte); si no, se crea. Su correo es con el que entrará.
+    let empleadoId;
+    if (ficha) {
+      empleadoId = Number(ficha.id);
+      const email = ficha.email ?? datos.email;
+      await exigirCorreoLibre(conn, email, empleadoId);
+      await txExecute(
         conn,
-        `INSERT INTO usuarios (uuid, empresa_id, nombre, documento, email, password_hash, rol, rol_asistencia,
-                               telefono, restringir_horario, horario)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [
-          uuid,
-          empresaId,
-          datos.nombre,
-          datos.documento,
-          datos.email,
-          hash,
-          roles.rol,
-          roles.rolAsistencia,
-          datos.telefono ?? null,
-          datos.restringir_horario ? 1 : 0,
-          tramos.length ? JSON.stringify(tramos) : null,
-        ],
+        'UPDATE empleados SET email = ?, telefono = COALESCE(telefono, ?), activo = 1 WHERE id = ? AND empresa_id = ?',
+        [email, datos.telefono ?? null, empleadoId, empresaId],
       );
-    } finally {
-      await txExecute(conn, 'SET @cupo_vincula_empleado = NULL', []);
+    } else {
+      await exigirCorreoLibre(conn, datos.email);
+      let sedeEmpleado = sedeIds[0] ?? null;
+      if (!sedeEmpleado) {
+        const principal = await txQueryOne(
+          conn,
+          'SELECT id FROM sedes WHERE empresa_id = ? AND es_principal = 1 AND deleted_at IS NULL ORDER BY id LIMIT 1',
+          [empresaId],
+        );
+        sedeEmpleado = principal ? Number(principal.id) : null;
+      }
+      empleadoId = await crearEmpleado(conn, {
+        empresaId,
+        sedeId: sedeEmpleado,
+        nombre: datos.nombre,
+        documento: datos.documento,
+        cargo: etiquetaRol(datos.rol),
+        telefono: datos.telefono,
+        email: datos.email,
+      });
     }
-    await fijarSedes(conn, r.insertId, sedeIds);
 
-    // El empleado es el mismo en Presente: allí solo le falta el rostro.
-    let sedeFicha = ficha?.sede_id ?? sedeIds[0] ?? null;
-    if (!sedeFicha) {
-      const principal = await txQueryOne(
+    // La cuenta. Si tuvo una y se dio de baja, se reactiva la MISMA: sus
+    // ventas y movimientos de antes siguen a su nombre.
+    const horario = tramos.length ? JSON.stringify(tramos) : null;
+    let uuid;
+    let usuarioId;
+    if (ficha?.usuario_id) {
+      uuid = ficha.usuario_uuid;
+      usuarioId = Number(ficha.usuario_id);
+      await txExecute(
         conn,
-        'SELECT id FROM sedes WHERE empresa_id = ? AND es_principal = 1 AND deleted_at IS NULL ORDER BY id LIMIT 1',
-        [empresaId],
+        `UPDATE usuarios SET password_hash = ?, rol = ?, rol_asistencia = ?, activo = 1, deleted_at = NULL,
+                pausa_inventario = 0, restringir_horario = ?, horario = ?, acceso_extra_hasta = NULL
+          WHERE id = ?`,
+        [hash, roles.rol, roles.rolAsistencia, datos.restringir_horario ? 1 : 0, horario, usuarioId],
       );
-      sedeFicha = principal ? Number(principal.id) : null;
+    } else {
+      uuid = datos.uuid ?? nuevoUuid();
+      const r = await txExecute(
+        conn,
+        `INSERT INTO usuarios (uuid, empresa_id, empleado_id, password_hash, rol, rol_asistencia,
+                               restringir_horario, horario)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [uuid, empresaId, empleadoId, hash, roles.rol, roles.rolAsistencia, datos.restringir_horario ? 1 : 0, horario],
+      );
+      usuarioId = Number(r.insertId);
     }
-    await crearFichaAsistencia(conn, {
-      empresaId,
-      usuarioId: r.insertId,
-      sedeId: sedeFicha,
-      nombre: datos.nombre,
-      documento: datos.documento,
-      cargo: etiquetaRol(datos.rol),
-      telefono: datos.telefono,
-      email: datos.email,
-    });
+    await fijarSedes(conn, usuarioId, sedeIds);
 
     await registrarAuditoria(conn, {
       usuarioId: gestor.usuario.id,
@@ -584,9 +598,34 @@ export async function actualizar(uuid, datosCliente, gestor, ctx) {
       throw conflict('ULTIMO_DIRECTOR', 'Debe quedar al menos un Director General activo');
     }
 
+    // Los datos de la persona viven SOLO en su empleado (los ve Presente
+    // igual). Las cuentas técnicas sin empleado guardan nombre y correo propios.
+    const personales = ['nombre', 'documento', 'email', 'telefono'].filter((c) => datos[c] !== undefined);
+    if (personales.length) {
+      if (datos.email !== undefined && datos.email !== antes.email) {
+        await exigirCorreoLibre(conn, datos.email, antes.empleado_id);
+      }
+      if (antes.empleado_id) {
+        await txExecute(
+          conn,
+          `UPDATE empleados SET ${personales.map((c) => `${c} = ?`).join(', ')} WHERE id = ? AND empresa_id = ?`,
+          [...personales.map((c) => datos[c]), antes.empleado_id, empresaId],
+        );
+      } else {
+        const propios = personales.filter((c) => c === 'nombre' || c === 'email');
+        if (propios.length) {
+          await txExecute(
+            conn,
+            `UPDATE usuarios SET ${propios.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
+            [...propios.map((c) => datos[c]), antes.id],
+          );
+        }
+      }
+    }
+
     const campos = [];
     const valores = [];
-    for (const clave of ['nombre', 'documento', 'email', 'rol', 'rol_asistencia', 'telefono']) {
+    for (const clave of ['rol', 'rol_asistencia']) {
       if (datos[clave] !== undefined) {
         campos.push(`${clave} = ?`);
         valores.push(datos[clave]);
@@ -640,18 +679,6 @@ export async function actualizar(uuid, datosCliente, gestor, ctx) {
 
     if (datos.activo === false || datos.password !== undefined) {
       await revocarSesiones(conn, antes.id);
-    }
-
-    // El empleado es el mismo en Presente: sus datos se mantienen iguales.
-    if (['nombre', 'documento', 'email', 'telefono'].some((c) => datos[c] !== undefined)) {
-      await txExecute(
-        conn,
-        `UPDATE asis_empleados e JOIN usuarios u ON u.id = e.usuario_id
-            SET e.nombre = u.nombre, e.documento = COALESCE(u.documento, e.documento),
-                e.email = u.email, e.telefono = u.telefono
-          WHERE e.usuario_id = ? AND e.empresa_id = ?`,
-        [antes.id, empresaId],
-      );
     }
 
     // ── Auditoría: una entrada por cada cosa sensible que cambió ──────────────
@@ -714,14 +741,13 @@ export async function eliminar(uuid, gestor, ctx) {
       await txExecute(conn, 'UPDATE usuarios SET rol = NULL, pausa_inventario = 0 WHERE id = ?', [u.id]);
     } else {
       // Borrado lógico: las ventas y movimientos históricos deben seguir
-      // apuntando a quién los hizo. El empleado sigue existiendo en Presente,
-      // ahora sin cuenta.
+      // apuntando a quién los hizo. El empleado sigue existiendo en Presente;
+      // si se le vuelve a dar acceso, se reactiva esta misma cuenta.
       await txExecute(
         conn,
         'UPDATE usuarios SET deleted_at = UTC_TIMESTAMP(3), activo = 0 WHERE id = ?',
         [u.id],
       );
-      await txExecute(conn, 'UPDATE asis_empleados SET usuario_id = NULL WHERE usuario_id = ?', [u.id]);
     }
     await revocarSesiones(conn, u.id);
     await registrarAuditoria(conn, {
@@ -797,18 +823,13 @@ export async function revocarAccesoExtra(uuid, gestor, ctx) {
 }
 
 /**
- * Personas que ya marcan asistencia en Presente en esa sede y aún no tienen
- * cuenta: al crear un vendedor se elige una y no se reescriben sus datos (el
- * documento la liga a la cuenta, y no ocupa un cupo nuevo).
- */
-/**
  * Empleados (registrados en cualquiera de las dos apps) que aún NO tienen
  * acceso a Ventario: para darles acceso sin volver a escribir sus datos.
  * Incluye a quien ya tiene cuenta de Presente (se le agrega Ventario).
  */
 export async function personasSinCuenta({ sede, q }, gestor) {
   const empresaId = gestor.alcance.empresaId;
-  const where = ['e.empresa_id = ?', 'e.activo = 1', '(e.usuario_id IS NULL OR u.rol IS NULL)'];
+  const where = ['e.empresa_id = ?', 'e.activo = 1', '(u.id IS NULL OR u.deleted_at IS NOT NULL OR u.rol IS NULL)'];
   const params = [empresaId];
   if (sede) {
     const s = await queryOne('SELECT id FROM sedes WHERE uuid = ? AND empresa_id = ? AND deleted_at IS NULL', [
@@ -824,11 +845,12 @@ export async function personasSinCuenta({ sede, q }, gestor) {
     params.push(`%${q}%`, `%${q}%`);
   }
   const filas = await query(
-    `SELECT e.documento, e.nombre, e.cargo, e.telefono, COALESCE(e.email, u.email) AS email,
-            e.sede_id, s.uuid AS sede_uuid, s.nombre AS sede_nombre, (u.id IS NOT NULL) AS con_cuenta
-       FROM asis_empleados e
+    `SELECT e.documento, e.nombre, e.cargo, e.telefono, e.email,
+            e.sede_id, s.uuid AS sede_uuid, s.nombre AS sede_nombre,
+            (u.id IS NOT NULL AND u.deleted_at IS NULL) AS con_cuenta
+       FROM empleados e
        JOIN sedes s ON s.id = e.sede_id
-       LEFT JOIN usuarios u ON u.id = e.usuario_id AND u.deleted_at IS NULL
+       LEFT JOIN usuarios u ON u.empleado_id = e.id
       WHERE ${where.join(' AND ')}
       ORDER BY e.nombre
       LIMIT 200`,
@@ -862,8 +884,16 @@ export async function pausar(uuid, { aplicativo, pausada }, gestor, ctx) {
     if (u.rol === ROLES.ADMIN && pausada) {
       throw badRequest('DIRECTOR_SIN_PAUSA', 'Al administrador no se le pausa');
     }
-    const columna = aplicativo === 'INVENTARIO' ? 'pausa_inventario' : 'pausa_asistencia';
-    await txExecute(conn, `UPDATE usuarios SET ${columna} = ? WHERE id = ?`, [pausada ? 1 : 0, u.id]);
+    if (aplicativo === 'INVENTARIO') {
+      await txExecute(conn, 'UPDATE usuarios SET pausa_inventario = ? WHERE id = ?', [pausada ? 1 : 0, u.id]);
+    } else if (u.empleado_id) {
+      // En Presente la pausa es de la persona: no marca ni entra a Presente.
+      await txExecute(conn, 'UPDATE empleados SET en_pausa = ? WHERE id = ? AND empresa_id = ?', [
+        pausada ? 1 : 0,
+        u.empleado_id,
+        empresaId,
+      ]);
+    }
     if (pausada && aplicativo === 'INVENTARIO') await revocarSesiones(conn, u.id);
     await registrarAuditoria(conn, {
       usuarioId: gestor.usuario.id,

@@ -92,7 +92,7 @@ class EmpleadoRegistrado {
   factory EmpleadoRegistrado.desdeJson(Map<String, dynamic> j) {
     final sede = j['sede'] as Map<String, dynamic>?;
     return EmpleadoRegistrado(
-      documento: j['documento'] as String,
+      documento: (j['documento'] as String?) ?? '',
       nombre: j['nombre'] as String,
       sedeUuid: sede?['uuid'] as String? ?? '',
       sedeNombre: sede?['nombre'] as String? ?? '',

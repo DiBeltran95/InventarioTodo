@@ -34,11 +34,12 @@ export function fueraDeHorario(evaluacion) {
  */
 export function cargarUsuarioDeSesion(uuid) {
   return queryOne(
-    `SELECT u.id, u.uuid, u.empresa_id, u.nombre, u.email, u.rol, u.activo, u.pausa_inventario,
+    `SELECT u.id, u.uuid, u.empresa_id, u.nombre, u.email, u.rol,
+            (u.activo = 1 AND COALESCE(u.empleado_activo, 1) = 1) AS activo, u.pausa_inventario,
             u.restringir_horario, u.horario, u.acceso_extra_hasta,
             e.estado AS empresa_estado, e.deleted_at AS empresa_borrada,
             ea.activo AS app_habilitada
-       FROM usuarios u
+       FROM v_usuarios u
        LEFT JOIN empresas e ON e.id = u.empresa_id
        LEFT JOIN empresa_aplicativos ea ON ea.empresa_id = u.empresa_id AND ea.aplicativo = 'INVENTARIO'
       WHERE u.uuid = ? AND u.deleted_at IS NULL AND u.es_superadmin = 0`,

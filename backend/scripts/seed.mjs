@@ -96,7 +96,7 @@ try {
   }
 
   // 2. Empresa de demostración, registrada como lo haría la app.
-  const admin = await uno('SELECT id, empresa_id FROM usuarios WHERE email = ?', ['admin@inventario.local']);
+  const admin = await uno('SELECT id, empresa_id FROM v_usuarios WHERE email = ?', ['admin@inventario.local']);
   if (admin) {
     empresaId = admin.empresa_id;
     console.log(`  ${c.dim}·${c.reset} Tienda Demo ya existía (contraseñas sin cambios)`);
@@ -123,14 +123,19 @@ try {
     console.log(`  ${c.green}✓${c.reset} Tienda Demo (plan ILIMITADO, Inventario + Control de Personal)`);
   }
   const sede = await uno('SELECT id FROM sedes WHERE empresa_id = ? AND es_principal = 1', [empresaId]);
-  const adminId = (await uno('SELECT id FROM usuarios WHERE email = ?', ['admin@inventario.local'])).id;
+  const adminId = (await uno('SELECT id FROM v_usuarios WHERE email = ?', ['admin@inventario.local'])).id;
 
   // 3. Vendedor de la sede principal.
-  if (!(await uno('SELECT id FROM usuarios WHERE email = ?', ['vendedor@inventario.local']))) {
+  if (!(await uno('SELECT id FROM v_usuarios WHERE email = ?', ['vendedor@inventario.local']))) {
+    const [e] = await conn.query(
+      `INSERT INTO empleados (empresa_id, sede_id, documento, nombre, cargo, email)
+       VALUES (?, ?, '1000000001', 'Vendedor', 'Vendedor', 'vendedor@inventario.local')`,
+      [empresaId, sede.id],
+    );
     const [r] = await conn.query(
-      `INSERT INTO usuarios (uuid, empresa_id, nombre, email, password_hash, rol)
-       VALUES (?, ?, 'Vendedor', 'vendedor@inventario.local', ?, 'VENDEDOR')`,
-      [uuidv7(), empresaId, await hash(PASSWORD_VENDEDOR)],
+      `INSERT INTO usuarios (uuid, empresa_id, empleado_id, password_hash, rol)
+       VALUES (?, ?, ?, ?, 'VENDEDOR')`,
+      [uuidv7(), empresaId, e.insertId, await hash(PASSWORD_VENDEDOR)],
     );
     await conn.query('INSERT IGNORE INTO usuario_sedes (usuario_id, sede_id) VALUES (?, ?)', [r.insertId, sede.id]);
     console.log(`  ${c.green}✓${c.reset} Usuario vendedor@inventario.local (VENDEDOR)`);

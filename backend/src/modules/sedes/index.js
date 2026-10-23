@@ -186,7 +186,7 @@ async function listarSolicitudes(req) {
             d.uuid AS destino_uuid, d.nombre AS destino_nombre,
             o.uuid AS origen_uuid, o.nombre AS origen_nombre
        FROM solicitudes_cambio_sede sc
-       JOIN usuarios u ON u.id = sc.usuario_id
+       JOIN v_usuarios u ON u.id = sc.usuario_id
        JOIN sedes d ON d.id = sc.sede_destino_id
        LEFT JOIN usuario_sedes us ON us.usuario_id = u.id
        LEFT JOIN sedes o ON o.id = us.sede_id
@@ -220,7 +220,7 @@ async function resolver(req, uuid, aceptar) {
     const sol = await txQueryOne(
       conn,
       `SELECT sc.id, sc.usuario_id, sc.sede_destino_id, u.uuid AS usuario_uuid, u.nombre AS usuario_nombre
-         FROM solicitudes_cambio_sede sc JOIN usuarios u ON u.id = sc.usuario_id
+         FROM solicitudes_cambio_sede sc JOIN v_usuarios u ON u.id = sc.usuario_id
         WHERE sc.uuid = ? AND u.empresa_id = ? FOR UPDATE`,
       [uuid, req.empresaId],
     );
